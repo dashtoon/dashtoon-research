@@ -961,7 +961,7 @@ if __name__ == '__main__':
     parser.add_argument('--adapter_names', type=str, nargs='+', default=['sketch', 'openpose'], help='List of strings for adapter names, it can be sketch, keypose, seg, depth, canny, style, color, openpose')
     parser.add_argument('--learning_rate', type=float,  default=1e-5, help='Learning rate')
     parser.add_argument('--adam_weight_decay', type=float, default=5e-5, help='Weight decay for Adam optimizer')
-    parser.add_argument('--dataset_dir', type=str, default="dress_pose_depth_scribble_captions_v1.0_3_million", help='Directory of the dataset locally stored in huggingface datasets format')
+    parser.add_argument('--dataset_dir', type=str, default=None, help='Directory of the dataset locally stored in huggingface datasets format')
     parser.add_argument('--shuffle', type=bool, default=True, help='Whether to shuffle the dataset')
     parser.add_argument('--conditioning_image_column', nargs='+', default=["scribble_path", "pose_path"], help='names of columns from the dataset that need to be used as conditioning images, should correspond to adapter names argument given and equal to n_adapters')
     parser.add_argument('--workers', type=int, default=12, help='Number of workers')
