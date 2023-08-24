@@ -40,7 +40,7 @@ from diffusers import (
     DDPMScheduler,
     UNet2DConditionModel,
     UniPCMultistepScheduler,
-    #T2IAdapter,
+    
 )
 # from diffusers.models.adapter import LightAdapter
 from adapter import T2IAdapter, CoAdapterFuser
@@ -69,9 +69,6 @@ from transformers import AutoTokenizer, DPTFeatureExtractor, DPTForDepthEstimati
 
 
 
-
-
-
 # ==========================================================================
 #                             setup logger                                  
 # ==========================================================================
@@ -80,12 +77,9 @@ log_format = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 logging.basicConfig(filename='dataset.log', filemode='a', format=log_format, level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
-
-
-
-
-
-
+# ==========================================================================
+#                          Dataset class making function                                  
+# ==========================================================================
 
 class prepare_dataset:
     def __init__(self,
@@ -94,7 +88,6 @@ class prepare_dataset:
                  image_column,
                  caption_column,
                  conditioning_image_column : List[str],
-                #  conditioning_image_column2,
                  device = "cuda:3",
                  resolution = 1024,
                  shuffle = True,
@@ -146,6 +139,9 @@ class prepare_dataset:
     
     
     def get_dataset(self):
+        '''
+        Will be called by pl-data module to fetch the dataset
+        '''
         return self.processed_dataset
     
     
@@ -231,7 +227,7 @@ class prepare_dataset:
     
     def process_train_ds(self, train_ds, proportion_empty_prompts=0.0, device = "cuda:3"):
         '''
-        take train dataset and compute embeddings for unet and both text encoders to save the VRAM
+        take train dataset and compute embeddings from both text encoders to feed the unet at training time and 
         apply the transformation and preprocessing
         '''
         compute_embeddings_fn = functools.partial(
@@ -472,11 +468,15 @@ class prepare_dataset:
 
         
     def train_collate_fn(self, examples):
+        '''
+        create as many conditioning images batches as there are conditioning images columns specified by the user
+        it will be passed to the dataloader to create a batch
         
-        # target images ka batch
-        
-        # import joblib
-        # joblib.dump(examples, 'examples.pkl')
+        Parameters
+        ----------
+        examples :  a single record
+
+        '''        
         
         pixel_values = torch.stack([example["pixel_values"] for example in examples])
         # ============================================================
@@ -490,21 +490,6 @@ class prepare_dataset:
             memory_format=torch.contiguous_format
             ).float()
             _condition[f'conditioning_pixel_values{k+1}'] = conditioning_pixel_values
-        
-        # conditioning_pixel_values2 = torch.stack(
-        #     [example["conditioning_pixel_values2"] for example in examples]
-        # )
-        
-        # push the conditioning images to gpu
-        # conditioning_pixel_values = conditioning_pixel_values.to(
-        #     memory_format=torch.contiguous_format
-        # ).float()
-        # conditioning_pixel_values2 = conditioning_pixel_values2.to(
-        #     memory_format=torch.contiguous_format
-        # ).float()
-        
-        
-        # ==========================================================
         
         
         
@@ -522,8 +507,6 @@ class prepare_dataset:
 
         return {
             "pixel_values": pixel_values,
-            # "conditioning_pixel_values": conditioning_pixel_values,
-            # "conditioning_pixel_values2": conditioning_pixel_values2,
             "condition" : _condition,
             "prompt_ids": prompt_ids,
             "unet_added_conditions": {
@@ -564,13 +547,7 @@ class sdxl_pl_model(pl.LightningModule):
                  adam_weight_decay, 
                  dataset_dir="dress_pose_depth_scribble_captions_v1.0_3_million",
                  shuffle=True,
-                 
-                #  image_column="image_path",
-                #  caption_column="caption",
                  conditioning_image_column = ["scribble_path", "pose_path"],
-                #  conditioning_image_column2 = "pose_path",
-                #  max_train_samples = 10000,
-                #  dataset_cache_device = "cuda:3",
                  workers = 12,
                  batchsize = 2,
                  pretrained_model_name_or_path = "stabilityai/stable-diffusion-xl-base-1.0",
@@ -587,12 +564,9 @@ class sdxl_pl_model(pl.LightningModule):
         self.dataset_name = dataset_name,
         self.dataset_dir = dataset_dir, 
         self.shuffle = shuffle,
-        # self.image_column = image_column,
-        # self.caption_column = caption_column,
+        
         self.conditioning_image_column = conditioning_image_column,
-        # self.conditioning_image_column2 = conditioning_image_column2,
-        # self.max_train_samples = max_train_samples
-        # self.dataset_cache_device = dataset_cache_device
+        
         self.workers = workers
         self.batchsize = batchsize
         
@@ -670,8 +644,7 @@ class sdxl_pl_model(pl.LightningModule):
         _condition_batches = []
         for k in range(len(self.conditioning_image_column[0])):
             _condition_batches.append(batch['condition'][f'conditioning_pixel_values{k+1}'])
-            # t2i_adapter_image = batch["conditioning_pixel_values"] # sketch
-        # t2i_adapter_image2 = batch["conditioning_pixel_values2"]  # pose
+            
         
         # # log the images to wandb
         # to_pil = transforms.ToPILImage()
@@ -679,20 +652,11 @@ class sdxl_pl_model(pl.LightningModule):
         # t2i_adapter_image2_wandb = [to_pil(k) for k in t2i_adapter_image2]
         
 
-        # down_block_res_samples = scribble_adapter(t2i_adapter_image)
-        # down_block_res_samples = self.model(t2i_adapter_image, t2i_adapter_image2)
         
-        # for debugging
-        # import joblib
-        
-        # joblib.dump(_condition_batches, 'condition_batches.pkl')
-        # joblib.dump(self.model, 'model.pkl')
         down_block_res_samples = self.model(*_condition_batches)
         
-        # # reverse the list
-        # up_block_res_samples = down_block_res_samples[::-1]
         
-        
+        # 🔴 For debugging, in ko ghair-comment krna hai. yahan concat feature k masail aatey hain
         # for k in down_block_res_samples:
         #     Console().print(k.shape)
         
@@ -751,8 +715,6 @@ class sdxl_pl_model(pl.LightningModule):
         )
         Console().print(f"optimizer defined")
         
-        # Define learning rate scheduler (for example, a StepLR)
-        # self.trainer.max_steps
         lr_scheduler = {
             'scheduler': torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=self.trainer.max_epochs, eta_min=1e-6),
             'interval': 'epoch',  # or 'step' for step-wise learning rate updates
@@ -761,11 +723,7 @@ class sdxl_pl_model(pl.LightningModule):
 
         return {'optimizer': optimizer, 'lr_scheduler': lr_scheduler}
         
-        
-        
-        
-        
-        
+
     def setup_coadapter_adapters_model(self, n_adapters : int = 2, adapter_names : List[str] = ['sketch', 'openpose']):
         
         
@@ -776,12 +734,6 @@ class sdxl_pl_model(pl.LightningModule):
             
             all_adapters.append(adapter)
         
-        # adapter_sketch = T2IAdapter(channels=[320, 640, 1280], in_channels=3)
-        # adapter_sketch.requires_grad_(True)
-        
-        
-        # adapter_pose = T2IAdapter(channels=[320,640,1280], in_channels=3)
-        # adapter_pose.requires_grad_(True)
         
         # 💀  define coadapter
         coadapter_fuser = CoAdapterFuser()
@@ -791,15 +743,8 @@ class sdxl_pl_model(pl.LightningModule):
         fuser = Capsule_CoAdapter(*all_adapters, coadapter_fuser=coadapter_fuser, adapter_order=adapter_names)
         fuser.requires_grad_(True)
         
-        
-        
         return fuser
         
-        
-        
-        
-        
-    
         
     def import_model_class_from_model_name_or_path(self,
                                                 pretrained_model_name_or_path: str, 
@@ -821,7 +766,6 @@ class sdxl_pl_model(pl.LightningModule):
             return CLIPTextModelWithProjection
         else:
             raise ValueError(f"{model_class} is not supported.")
-    
     
     
     def _initialize_components(self):
@@ -886,7 +830,7 @@ class sdxl_pl_model(pl.LightningModule):
 
 
 # ==========================================================================
-#                             yeh Data Module related                                  
+#                         yeh Data Module related cheezain hain                                  
 # ==========================================================================
 
 class dm(pl.LightningDataModule):
@@ -897,7 +841,6 @@ class dm(pl.LightningDataModule):
                  image_column, 
                  caption_column, 
                  conditioning_image_column, 
-                #  conditioning_image_column2, 
                  max_train_samples, 
                  dataset_cache_device, 
                  batchsize, 
@@ -909,7 +852,7 @@ class dm(pl.LightningDataModule):
         self.image_column = image_column
         self.caption_column = caption_column
         self.conditioning_image_column = conditioning_image_column
-        # self.conditioning_image_column2 = conditioning_image_column2
+        
         self.max_train_samples = max_train_samples
         self.dataset_cache_device = dataset_cache_device
         self.batchsize = batchsize
@@ -932,17 +875,6 @@ class dm(pl.LightningDataModule):
         Console().log(f"🟩 setup stage called .... ", style='red')
 
     def train_dataloader(self):
-        # self.dataset_ = prepare_dataset(
-        #                     dataset_name=self.dataset_name,
-        #                     dataset_dir=self.dataset_dir, 
-        #                     shuffle=self.shuffle,
-        #                     image_column=self.image_column,
-        #                     caption_column=self.caption_column,
-        #                     conditioning_image_column=self.conditioning_image_column,
-        #                     conditioning_image_column2=self.conditioning_image_column2,
-        #                     max_train_samples=self.max_train_samples,
-        #                     device=self.dataset_cache_device
-        #                 )
 
         dl = self.dataset_.get_dataloader(batchsize=self.batchsize, workers=self.workers, shuffle=self.shuffle)
         return dl
@@ -968,20 +900,10 @@ if __name__ == '__main__':
     parser.add_argument('--batchsize', type=int, default=2, help='Batch size per GPU')
     parser.add_argument('--pretrained_model_name_or_path', type=str, default="stabilityai/stable-diffusion-xl-base-1.0", help='Path or name of the pretrained SDXL model')
     parser.add_argument('--pretrained_vae_model_name_or_path', type=str, default=None, help='Path or name of the pretrained VAE model')
-    
-    # Arguments for the second function (some are repeated and hence commented out)
-    # parser.add_argument('--dataset_name', type=str, required=True, help='Name of the dataset')
-    # parser.add_argument('--dataset_dir', type=str, required=True, help='Directory of the dataset')
-    # parser.add_argument('--shuffle', type=bool, default=True, help='Whether to shuffle the dataset')
     parser.add_argument('--image_column', type=str, default='image_path', help='column name from dataset which corresponds to the target Image')
     parser.add_argument('--caption_column', type=str, default="caption", help='column name from dataset which corresponds to the caption')
-    # parser.add_argument('--conditioning_image_column', nargs='+', default=True, help='Conditioning image columns')
     parser.add_argument('--max_train_samples', type=int, default=None, help='Maximum number of training samples to use for training')
     parser.add_argument('--dataset_cache_device', type=str, default='cuda:0', help='Device for caching the caption encodings for both text encoders to save time during training, default is cuda:0')
-    # parser.add_argument('--batchsize', type=int, default=True, help='Batch size')
-    # parser.add_argument('--workers', type=int, default=True, help='Number of workers')
-
-
 
     # WandbLogger arguments
     parser.add_argument('--wandb_name', type=str, default="sdxl_adapter_coadapter-pl-lightning", help='Name for WandbLogger')
@@ -995,7 +917,6 @@ if __name__ == '__main__':
     
     
     # Trainer
-    
     parser.add_argument("--max_epochs", default=5, type=int, help="Number of training epochs")
     parser.add_argument("--accumulate_grad_batches", default=4, type=int, help="no. of gradient batches to accumulate")
     parser.add_argument('--devices', type=int, nargs='+', default=[0,1], help='list of gpu devices to use for training')
@@ -1035,9 +956,6 @@ if __name__ == '__main__':
     
         status.update("Data class initailized....", spinner='runner')   
         
-        
-  
-    
     
         status.update(f"training start.....", spinner='earth')
         wandb_logger = WandbLogger(name="sdxl_adapter_coadapter-pl-lightning", save_dir="./pl_lightning_ckpts", log_model="all", project="sdxl_codadpters")
@@ -1060,5 +978,3 @@ if __name__ == '__main__':
                             )
         
         trainer.fit(model, data_module)
-    
-
