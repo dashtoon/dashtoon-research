@@ -58,9 +58,9 @@ class MultiAdapter(ModelMixin):
                 them together.
         """
         if adapter_weights is None:
-            adapter_weights = torch.tensor([1 / self.num_adapter] * self.num_adapter)
+            adapter_weights = torch.tensor([1 / self.num_adapter] * self.num_adapter, device=self.device)
         else:
-            adapter_weights = torch.tensor(adapter_weights)
+            adapter_weights = torch.tensor(adapter_weights, device=self.device)
 
         if xs.shape[1] % self.num_adapter != 0:
             raise ValueError(
@@ -75,7 +75,8 @@ class MultiAdapter(ModelMixin):
                 accume_state = features
             else:
                 for i in range(len(features)):
-                    accume_state[i] += w * features[i]
+                    # accume_state[i] += w * features[i]
+                    accume_state[i] = accume_state[i] + w * features[i]
         return accume_state
 
 

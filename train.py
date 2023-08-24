@@ -43,7 +43,7 @@ from diffusers import (
     
 )
 # from diffusers.models.adapter import LightAdapter
-from adapter import T2IAdapter, CoAdapterFuser
+from adapter import T2IAdapter, CoAdapterFuser, MultiAdapter
 from diffusers.optimization import get_scheduler
 from diffusers.utils import check_min_version, is_wandb_available
 from diffusers.utils.import_utils import is_xformers_available
@@ -115,11 +115,16 @@ class prepare_dataset:
         Console().print(f"column names are {column_names}", style='red')
         
         # split the dataset
-        dataset = dataset.train_test_split(test_size=0.01)
-        Console().print(f"dataset has been split", style='red')
-        
-        train_dataset = dataset["train"]
-        test_dataset = dataset["test"]
+        import datasets
+        if isinstance(dataset, datasets.arrow_dataset.Dataset):
+            # if dataset has no predefined split then split it.
+            dataset = dataset.train_test_split(test_size=0.01)
+            Console().print(f"dataset has been split", style='red')
+            train_dataset = dataset["train"]
+            test_dataset = dataset["test"]
+        if isinstance(dataset, datasets.dataset_dict.DatasetDict):
+            Console().print(f"dataset has predefined split...⚡", style='red')
+            train_dataset = dataset["train"]
         
         if shuffle:
             train_dataset = train_dataset.shuffle(seed=100)
@@ -540,6 +545,7 @@ class prepare_dataset:
 # ==========================================================================
 class sdxl_pl_model(pl.LightningModule):
     def __init__(self, 
+                 with_coadapter,
                  dataset_name, 
                  n_adapters, 
                  adapter_names, 
@@ -554,6 +560,7 @@ class sdxl_pl_model(pl.LightningModule):
                  pretrained_vae_model_name_or_path = None
                  ) -> None:
         super().__init__()
+        self.with_coadapter = with_coadapter
         self.n_adapters = n_adapters
         self.adapter_names = adapter_names
         self.learning_rate = learning_rate
@@ -587,10 +594,21 @@ class sdxl_pl_model(pl.LightningModule):
         
         
         Console().log(f"sdxl pipeline components have been initialized...")
-        # status.update(status=f"loading adapters - coadapters ...", spinner='aesthetic')
-        self.model = self.setup_coadapter_adapters_model(n_adapters = self.hparams.n_adapters, adapter_names = self.hparams.adapter_names)
-        Console().log(f"adapter-coadapters have been setup")
-        # status.update(status=f"⚡ Changing grad status of model components....", spinner='earth')
+        
+        if self.with_coadapter == True and self.n_adapters > 1:
+            # fuse individual adapters using the CoAdapters approach
+            Console().log(f"📢\t[red]t2i adapters will be fused using [green]co-adapter")
+            self.model = self.setup_coadapter_adapters_model(n_adapters = self.hparams.n_adapters, adapter_names = self.hparams.adapter_names)
+        if self.with_coadapter == False and self.n_adapters > 1:
+            # fuse individual adapters using the MultiAdapter approach
+            self.model = self.setup_multiadapter_adapters_model(n_adapters = self.hparams.n_adapters)
+            Console().log(f"📢\t[red]t2i adapters will be fused using [green]multi-adapter")
+        if self.n_adapters == 1:
+            # fuse individual adapters using the MultiAdapter approach
+            self.model = self.setup_single_adapter_model()
+        
+        
+        
         self.vae.requires_grad_(False)
         Console().log(f"changed vae grad to False")
         self.unet.requires_grad_(False)
@@ -652,8 +670,19 @@ class sdxl_pl_model(pl.LightningModule):
         # t2i_adapter_image2_wandb = [to_pil(k) for k in t2i_adapter_image2]
         
 
+        if self.with_coadapter == True and self.n_adapters > 1:
+            # for co-adapter fusion approach
+            down_block_res_samples = self.model(*_condition_batches)
         
-        down_block_res_samples = self.model(*_condition_batches)
+        elif self.with_coadapter == False and self.n_adapters > 1:
+            # for the multi-adapter fusion approach
+            # concat the batches in channel dim. since its the format multi-adapter is expecting
+            down_block_res_samples = self.model(torch.concat(_condition_batches, dim=1))
+            
+        elif self.n_adapters == 1:
+            # for single adapter, apply the conditioning image to the adapter
+            # _condition_batches will be a list of 1 
+            down_block_res_samples = self.model(*_condition_batches)
         
         
         # 🔴 For debugging, in ko ghair-comment krna hai. yahan concat feature k masail aatey hain
@@ -723,6 +752,52 @@ class sdxl_pl_model(pl.LightningModule):
 
         return {'optimizer': optimizer, 'lr_scheduler': lr_scheduler}
         
+        
+    def setup_multiadapter_adapters_model(self, n_adapters : int)-> MultiAdapter:
+        '''
+        takes mutliple individual T2I adapters and fuses them using the MultiAdapter approach
+
+        Parameters
+        ----------
+        n_adapters : int
+            no. of T2I adapters to fuse
+
+        Returns
+        -------
+        _type_
+            _description_
+        '''        
+        # fuse the individual t2idapters using Multiadapter
+        all_adapters = []
+        for k in range(n_adapters):
+            adapter =  T2IAdapter(channels=[320, 640, 1280], in_channels=3) 
+            adapter.requires_grad_(True)
+            
+            all_adapters.append(adapter)
+        
+        multi_adapter = MultiAdapter(all_adapters)
+        multi_adapter.requires_grad_(True)
+        Console().log(f'[yellow]multi adapter has been setup, grad set to [red] True')
+        
+        return multi_adapter
+    
+    
+    def setup_single_adapter_model(self,)->T2IAdapter:
+        '''
+        sutup single T2I adapter and return it
+
+        Returns
+        -------
+        T2IAdapter
+            
+        '''        
+        adapter =  T2IAdapter(channels=[320, 640, 1280], in_channels=3)
+        adapter.requires_grad_(True)
+        Console().log(f'[yellow]single T2I adapter has been setup, grad set to [red] True')
+        
+        return adapter
+    
+    
 
     def setup_coadapter_adapters_model(self, n_adapters : int = 2, adapter_names : List[str] = ['sketch', 'openpose']):
         
@@ -922,13 +997,21 @@ if __name__ == '__main__':
     parser.add_argument('--devices', type=int, nargs='+', default=[0,1], help='list of gpu devices to use for training')
 
 
+    # 1. if n_adapters 1 train a single adapter
+    # 2. if n_adapters > 1 train with coadapter
+    # 3. if n_adapters > 1 and --use_codapter False then Multi Adapter
+    parser.add_argument("--with_coadapter",  action='store_true'  , help="if this flag is given then multiple adapters will be fused using the codadapter approach")
+
+
     args = parser.parse_args()
     
     
     
     with Console().status(f"preparing things ....", spinner='material') as status:
             
-        model = sdxl_pl_model(dataset_name = args.dataset_name, 
+        model = sdxl_pl_model(
+                            with_coadapter = args.with_coadapter,
+                            dataset_name = args.dataset_name, 
                             dataset_dir=args.dataset_dir,
                             n_adapters = args.n_adapters, 
                             conditioning_image_column = args.conditioning_image_column,
@@ -957,24 +1040,35 @@ if __name__ == '__main__':
         status.update("Data class initailized....", spinner='runner')   
         
     
-        status.update(f"training start.....", spinner='earth')
-        wandb_logger = WandbLogger(name="sdxl_adapter_coadapter-pl-lightning", save_dir="./pl_lightning_ckpts", log_model="all", project="sdxl_codadpters")
+        
+        wandb_logger = WandbLogger(name="sdxl_adapter_coadapter-pl-lightning", 
+                                   save_dir="./pl_lightning_ckpts", 
+                                   log_model=False, 
+                                   project="sdxl_codadpters",
+                                   )
+        
+        wandb_logger.watch(model, log="all", log_freq=50, log_graph=True)
+        
+        lr_monitor = pl.callbacks.LearningRateMonitor(logging_interval='step')
         checkpoint_callback = pl.callbacks.ModelCheckpoint(every_n_train_steps=args.checkpoint_every_n_train_steps, 
                                                            dirpath=args.checkpoint_dirpath, 
                                                            filename='{epoch}-{step}', 
                                                            verbose=True, 
                                                            save_weights_only=False, 
+                                                           save_last=True,
                                                            save_on_train_epoch_end =True)
         status.update(f"callbacks defined....", spinner="dots")
+        status.update(f"[red]Training Started....\n\n", spinner="pong")
         trainer = pl.Trainer(
                                 logger=wandb_logger,
-                                callbacks=[checkpoint_callback],
+                                callbacks=[checkpoint_callback, lr_monitor],
                                 accelerator="auto",
                                 precision='bf16',
                                 devices=args.devices,
                                 strategy='ddp',
                                 max_epochs=args.max_epochs,
                                 accumulate_grad_batches=args.accumulate_grad_batches,
+                                log_every_n_steps = 5,
                             )
         
         trainer.fit(model, data_module)
