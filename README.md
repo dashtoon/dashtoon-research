@@ -13,31 +13,40 @@ Devices corresponds to the gpus to be used for training, if machine has 4 gpus t
  
 
 
-# Locally stored dataset in HF format
+# Traininng Adapters
+
+
+
+## multiple T2I adapters + CoAdapter fusion
 
 ```bash
 
-python train.py --n_adapters 2   --adapter_names sketch openpose  --learning_rate  1e-5  --dataset_dir  dress_pose_depth_scribble_captions_v1.0_3_million   --shuffle True  --conditioning_image_column   scribble_path  pose_path  --batchsize  2  --image_column image_path  --caption_column  caption  --max_train_samples  30  --dataset_cache_device "cuda:0"  --checkpoint_every_n_train_steps  5  --checkpoint_dirpath  sdxl_ckpts_dummy  --max_epochs 5  --accumulate_grad_batches 4  --devices 0 1 2
+python train.py --dataset_name SaffalPoosh/deep_fashion_mask_pose_overlay  --n_adapters 2   --adapter_names sketch openpose  --learning_rate  1e-5   --shuffle True  --conditioning_image_column   mask_respective  pose  --batchsize  4 --image_column image  --caption_column  caption  --max_train_samples  5000  --dataset_cache_device "cuda:0"  --checkpoint_every_n_train_steps  200  --checkpoint_dirpath  sdxl_ckpts_dummy  --max_epochs 5  --accumulate_grad_batches 4  --devices 0 1 2 3  --with_coadapter
 ```
 
 
-# Details of the dataset
 
-In above example Dataset is **Huggingface datasets** format dataset stored locally.
+## multiple T2I adapters + MultiAdapter fusion
 
-NAMES OF THE DATASET COLUMNS ARE:
+```bash
 
- - Conditioning image columns: ['scribble_path', 'pose_path']
- - Target image column: ['image_path']
- - Caption column: ['caption']
+python train.py --dataset_name SaffalPoosh/deep_fashion_mask_pose_overlay  --n_adapters 2   --adapter_names sketch openpose  --learning_rate  1e-5   --shuffle True  --conditioning_image_column   mask_respective  pose  --batchsize  4 --image_column image  --caption_column  caption  --max_train_samples  5000  --dataset_cache_device "cuda:0"  --checkpoint_every_n_train_steps  200  --checkpoint_dirpath  sdxl_ckpts_dummy  --max_epochs 5  --accumulate_grad_batches 4  --devices 0 1 2 3 
+```
 
 
-# 📢 Note
+## Single T2I adapter
 
-All conditional images must be RGB images.
+```bash
 
-
-
+python train.py --dataset_name SaffalPoosh/deep_fashion_mask_pose_overlay  --n_adapters 1   --adapter_names openpose  --learning_rate  1e-5   --shuffle True  --conditioning_image_column  pose  --batchsize  4 --image_column image  --caption_column  caption  --max_train_samples  5000  --dataset_cache_device "cuda:0"  --checkpoint_every_n_train_steps  200  --checkpoint_dirpath  sdxl_ckpts_dummy  --max_epochs 5  --accumulate_grad_batches 4  --devices 0 1 2 3 
+```
 
 
 
+
+> 📢 *Note*: All conditional images must be RGB images.
+
+
+
+
+![Alt text](image-1.png)
