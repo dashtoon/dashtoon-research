@@ -67,3 +67,5 @@ python train.py --dataset_name SaffalPoosh/deep_fashion_mask_pose_overlay  --n_a
  python inference.py  --checkpoint_path  sdxl_ckpts_dummy/epoch=12-step=4999.ckpt   --cond_images  scrapped_images_scribble_pose_caption/6_scribble.jpg   scrapped_images_scribble_pose_caption/6_pose.jpg   --device cuda:3  --text "A man posing for a photo, 4K" --num_steps  45 --with_coadapter  --n_adapters   2  --adapter_names  sketch openpose
 ```
 
+
+Flags `--with_coadapter --n_adapters 2` will control if a single t2i adapter has been used or a codadapter or a multiadapter fusion has been used. See the training guide above for explanation.
