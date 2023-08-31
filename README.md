@@ -15,9 +15,7 @@ Devices corresponds to the gpus to be used for training, if machine has 4 gpus t
 
 # Traininng Adapters
 
-
-
-## multiple T2I adapters + CoAdapter fusion
+## Multiple T2I adapters + CoAdapter fusion
 
 ```bash
 
@@ -50,3 +48,24 @@ python train.py --dataset_name SaffalPoosh/deep_fashion_mask_pose_overlay  --n_a
 
 
 ![Alt text](image-1.png)
+
+
+
+
+
+
+# Inference 
+
+💀 ⚠️ Similar Flags must be given as they were, during training. For example if while trainig the arguments `--with_coadapter  --n_adapters   2  --adapter_names  sketch openpose` were passed then those also need to be passed in the inference script as shown below.
+
+
+💀 ⚠️ Images must be passed in the same order as set during training, for example while training the adapter names were set as `sketch openpose` and likewise the column names were passed as `--conditioning_image_column   scribble_path  pose_path` which means that `sketch --> scribble_path` and `openpose --> pose_path` so at inference time `--cond_images  scrapped_images_scribble_pose_caption/6_scribble.jpg   scrapped_images_scribble_pose_caption/6_pose.jpg` are also in same order.
+
+
+
+```bash
+ python inference.py  --checkpoint_path  sdxl_ckpts_dummy/epoch=12-step=4999.ckpt   --cond_images  scrapped_images_scribble_pose_caption/6_scribble.jpg   scrapped_images_scribble_pose_caption/6_pose.jpg   --device cuda:3  --text "A man posing for a photo, 4K" --num_steps  45 --with_coadapter  --n_adapters   2  --adapter_names  sketch openpose
+```
+
+
+Flags `--with_coadapter --n_adapters 2` will control if a single t2i adapter has been used or a codadapter or a multiadapter fusion has been used. See the training guide above for explanation.
