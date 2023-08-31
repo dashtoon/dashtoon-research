@@ -1,0 +1,39 @@
+#!bin/bash
+python train_stable_diffusion_adapter.py \
+    --input-file-list-path image_paths.txt \
+    --output-dir outputs/ \
+    --logging-dir logs/ \
+    --gradient-accumulation-steps 1 \
+    --mixed-precision fp16 \
+    --report-to wandb \
+    --seed 8801 \
+    --pretrained-model-name-or-path 'runwayml/stable-diffusion-v1-5' \
+    --revision fp16 \
+    --adapter-name-or-path 'TencentARC/t2iadapter_sketch_sd15v2' \
+    --no-gradient-checkpointing \
+    --learning-rate 1e-05 \
+    --adam-beta1 0.9 \
+    --adam-beta2 0.999 \
+    --adam-weight-decay 1e-02 \
+    --adam-epsilon 1e-08 \
+    --max-grad-norm 1.0 \
+    --max-train-steps 1500000000 \
+    --lr-scheduler linear \
+    --lr-warmup-steps 500 \
+    --tracker-project-name diffusion \
+    --train-batch-size 16 \
+    --checkpoints-total-limit 5 \
+    --checkpointing-steps 100 \
+    --validation-steps 100 \
+    --validation-prompt "a person, finger tapping on head, eyes closed smiling" \
+    --validation-prompt "a person, arm raised, happy shouting" \
+    --validation-prompt "a person arm stretched, angry shouting" \
+    --validation-prompt "a person, angry" \
+    --validation-prompt "a person, shy embarrassed" \
+    --validation-prompt "a person, looking over the shoulder" \
+    --validation-image "condition_images/PROCESSED-NEW-SB-1.png" \
+    --validation-image "condition_images/PROCESSED-NEW-SB-2.png" \
+    --validation-image "condition_images/PROCESSED-NEW-SB-3.png" \
+    --validation-image "condition_images/PROCESSED-NEW-SB-4.png" \
+    --validation-image "condition_images/PROCESSED-NEW-SB-5.png" \
+    --validation-image "condition_images/PROCESSED-NEW-SB-6.png"
