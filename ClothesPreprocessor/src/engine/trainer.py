@@ -41,7 +41,7 @@ from detectron2.utils import comm
 from detectron2.utils.events import EventWriter, get_event_storage
 from torch import nn
 
-from ..data.dataset_mapper import DatasetMapper
+from src.data.dataset_mapper import DatasetMapper
 
 
 class SampleCountingLoader:

@@ -15,7 +15,7 @@ from detectron2.modeling import SEM_SEG_HEADS_REGISTRY
 from torch import nn
 from torch.nn import functional as F
 
-from ...layers.losses import DeepLabCE
+from src.layers.losses import DeepLabCE
 
 
 @SEM_SEG_HEADS_REGISTRY.register()
