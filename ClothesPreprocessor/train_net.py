@@ -23,19 +23,20 @@ from densepose.engine import Trainer
 from densepose.modeling.densepose_checkpoint import DensePoseCheckpointer
 
 from src.config import add_custom_config
-
-
-# import backbone
-# import roi_heads
-# from config import add_timmnets_config
-
+from src.data import load_coco_json
+from src import modelling, layers, solver, engine
+from src.engine import Trainer
 
 def setup(args):
     cfg = get_cfg()
+    
+    add_custom_config(cfg)
+
     cfg.merge_from_file(args.config_file)
     cfg.merge_from_list(args.opts)
     cfg.freeze()
     default_setup(cfg, args)
+    
     # Setup logger for "densepose" module
     setup_logger(output=cfg.OUTPUT_DIR, distributed_rank=comm.get_rank(), name="densepose")
     return cfg
@@ -47,25 +48,25 @@ def main(args):
     # hints through kwargs, like timeout in DP evaluation
     PathManager.set_strict_kwargs_checking(False)
 
-    if args.eval_only:
-        model = Trainer.build_model(cfg)
+    # if args.eval_only:
+    #     model = Trainer.build_model(cfg)
 
-        DensePoseCheckpointer(model, save_dir=cfg.OUTPUT_DIR).resume_or_load(
-            cfg.MODEL.WEIGHTS, resume=args.resume
-        )
-        res = Trainer.test(cfg, model)
-        if cfg.TEST.AUG.ENABLED:
-            res.update(Trainer.test_with_TTA(cfg, model))
-        if comm.is_main_process():
-            verify_results(cfg, res)
-        return res
+    #     DensePoseCheckpointer(model, save_dir=cfg.OUTPUT_DIR).resume_or_load(
+    #         cfg.MODEL.WEIGHTS, resume=args.resume
+    #     )
+    #     res = Trainer.test(cfg, model)
+    #     if cfg.TEST.AUG.ENABLED:
+    #         res.update(Trainer.test_with_TTA(cfg, model))
+    #     if comm.is_main_process():
+    #         verify_results(cfg, res)
+    #     return res
 
     trainer = Trainer(cfg)
     trainer.resume_or_load(resume=args.resume)
-    if cfg.TEST.AUG.ENABLED:
-        trainer.register_hooks(
-            [hooks.EvalHook(0, lambda: trainer.test_with_TTA(cfg, trainer.model))]
-        )
+    # if cfg.TEST.AUG.ENABLED:
+    #     trainer.register_hooks(
+    #         [hooks.EvalHook(0, lambda: trainer.test_with_TTA(cfg, trainer.model))]
+    #     )
     return trainer.train()
 
 
