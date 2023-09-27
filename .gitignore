@@ -1,7 +1,7 @@
 # custom
 ClothesPreprocessor/datasets/*
 ClothesPreprocessor/third_party/*
-ClothesPreprocessor/outputs/
+ClothesPreprocessor/output/*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

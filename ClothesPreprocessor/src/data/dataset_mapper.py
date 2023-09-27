@@ -23,9 +23,10 @@ def build_augmentation(cfg, is_train):
     logger = logging.getLogger(__name__)
     result = utils.build_augmentation(cfg, is_train)
     if is_train:
+        # add densepose-specific augmentation
         random_rotation = T.RandomRotation(cfg.INPUT.ROTATION_ANGLES, expand=False, sample_style="choice")
         result.append(random_rotation)
-        logger.info("DensePose-specific augmentation used in training: " + str(random_rotation))
+        logger.info("Augmentations used in training: " + str(result))
     return result
 
 
@@ -81,13 +82,13 @@ class DatasetMapper:
         image = utils.read_image(dataset_dict["file_name"], format=self.img_format)
         utils.check_image_size(dataset_dict, image)
 
-        if "sem_seg_file_name" in dataset_dict:
+        if "sem_seg_file_name" in dataset_dict and self.is_train:
             sem_seg_gt = utils.read_image(dataset_dict.pop("sem_seg_file_name"), "L").squeeze(2)
         else:
             sem_seg_gt = None
 
         aug_input = T.AugInput(image, sem_seg=sem_seg_gt)
-        transforms = self.augmentation(aug_input)
+        aug_input, transforms = T.apply_transform_gens(self.augmentation, aug_input)
         image, sem_seg_gt = aug_input.image, aug_input.sem_seg
 
         image_shape = image.shape[:2]  # h, w

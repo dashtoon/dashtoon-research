@@ -1,3 +1,4 @@
+import logging
 from typing import Callable, List, Union
 
 import timm
@@ -15,6 +16,8 @@ from detectron2.layers import (
 from detectron2.modeling import BACKBONE_REGISTRY, Backbone
 from detectron2.modeling.backbone.fpn import LastLevelMaxPool
 from timm.models._efficientnet_builder import BN_EPS_TF_DEFAULT, BN_MOMENTUM_TF_DEFAULT
+
+logger = logging.getLogger(__name__)
 
 __all__ = ["BiFPN", "build_timm_backbone"]
 
@@ -147,6 +150,7 @@ class BiFPN(Backbone):
 
     def forward(self, x):
         p2, p3, p4, p5 = self.bottom_up(x)
+        # ic(p2.shape, p3.shape, p4.shape, p5.shape)
 
         if self.training:
             _dummy = sum(x.view(-1)[0] for x in self.bottom_up.parameters()) * 0.0
@@ -188,6 +192,7 @@ def build_timm_backbone(cfg, input_shape):
     pretrained = cfg.MODEL.TIMMNETS.PRETRAINED
     scriptable = cfg.MODEL.TIMMNETS.SCRIPTABLE
     exportable = cfg.MODEL.TIMMNETS.EXPORTABLE
+    # output_stride = cfg.MODEL.TIMMNETS.OUTPUT_STRIDE
 
     # GET MODEL BY NAME
     model = timm.create_model(
@@ -198,6 +203,7 @@ def build_timm_backbone(cfg, input_shape):
         scriptable=scriptable,
         exportable=exportable,
         feature_location="expansion",
+        # output_stride=output_stride,
     )
 
     # LOAD MODEL AND CONVERT NORM
@@ -217,7 +223,7 @@ def build_timm_backbone(cfg, input_shape):
     # FREEZE FIRST 2 LAYERS
     max_block_number = int(model.feature_info[1]["module"][7:8])
     # max_block_number = int(model.feature_info[1]['name'][7:8])
-    print(f"Freezing stem and first {max_block_number + 1} backbone blocks")
+    logger.info(f"Freezing stem and first {max_block_number + 1} backbone blocks")
     for p in model.conv_stem.parameters():
         p.requires_grad = False
     model.bn1 = FrozenBatchNorm2d.convert_frozen_batchnorm(model.bn1)
@@ -276,3 +282,25 @@ def convert_norm_eps_momentum_to_tf_defaults(module):
         module_output.add_module(name, new_child)
     del module
     return module_output
+
+
+if __name__ == "__main__":
+    from detectron2.config import CfgNode as CN
+
+    _C = CN()
+    _C.MODEL = CN()
+    _C.MODEL.TIMMNETS = CN()
+    _C.MODEL.TIMMNETS.NAME = "tf_efficientnet_b0"
+    _C.MODEL.TIMMNETS.PRETRAINED = True
+    _C.MODEL.TIMMNETS.EXPORTABLE = False
+    _C.MODEL.TIMMNETS.SCRIPTABLE = False
+    _C.MODEL.TIMMNETS.OUT_FEATURES = (1, 2, 3, 4)
+    _C.MODEL.TIMMNETS.NORM = "FrozenBN"
+
+    _C.MODEL.FPN = CN()
+    _C.MODEL.FPN.OUT_CHANNELS = 256
+
+    model = build_timm_bifpn_backbone(_C, ShapeSpec(channels=3))
+    print(model)
+
+    print(model.output_shape())

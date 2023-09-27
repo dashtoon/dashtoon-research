@@ -1,8 +1,11 @@
 # Copyright (c) Facebook, Inc. and its affiliates.
+import warnings
 from typing import Callable, Dict, List, Optional, Tuple, Union
 
 import fvcore.nn.weight_init as weight_init
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
 from detectron2.config import configurable
 from detectron2.layers import (
     ASPP,
@@ -12,10 +15,29 @@ from detectron2.layers import (
     get_norm,
 )
 from detectron2.modeling import SEM_SEG_HEADS_REGISTRY
+from src.layers.losses import DeepLabCE
 from torch import nn
 from torch.nn import functional as F
 
-from src.layers.losses import DeepLabCE
+
+def resize(input, size=None, scale_factor=None, mode="nearest", align_corners=None, warning=True):
+    if warning:
+        if size is not None and align_corners:
+            input_h, input_w = tuple(int(x) for x in input.shape[2:])
+            output_h, output_w = tuple(int(x) for x in size)
+            if output_h > input_h or output_w > output_h:
+                if (
+                    (output_h > 1 and output_w > 1 and input_h > 1 and input_w > 1)
+                    and (output_h - 1) % (input_h - 1)
+                    and (output_w - 1) % (input_w - 1)
+                ):
+                    warnings.warn(
+                        f"When align_corners={align_corners}, "
+                        "the output would more aligned if "
+                        f"input size {(input_h, input_w)} is `x+1` and "
+                        f"out size {(output_h, output_w)} is `nx+1`"
+                    )
+    return F.interpolate(input, size, scale_factor, mode, align_corners)
 
 
 @SEM_SEG_HEADS_REGISTRY.register()
@@ -224,11 +246,11 @@ class DeepLabV3PlusHead(nn.Module):
         if self.decoder_only:
             # Output from self.layers() only contains decoder feature.
             return y
+
         if self.training:
             return None, self.losses(y, targets)
-        else:
-            y = F.interpolate(y, scale_factor=self.common_stride, mode="bilinear", align_corners=False)
-            return y, {}
+
+        return y, {}
 
     def layers(self, features):
         # Reverse feature maps into top-down order (from low to high resolution)
@@ -248,7 +270,7 @@ class DeepLabV3PlusHead(nn.Module):
         return y
 
     def losses(self, predictions, targets):
-        predictions = F.interpolate(predictions, scale_factor=self.common_stride, mode="bilinear", align_corners=False)
+        predictions = resize(predictions, size=targets.shape[2:], mode="bilinear", align_corners=False)
         loss = self.loss(predictions, targets)
         losses = {"loss_sem_seg": loss * self.loss_weight}
         return losses
@@ -325,14 +347,14 @@ class DeepLabV3Head(nn.Module):
         x = features[self.in_features[0]]
         x = self.aspp(x)
         x = self.predictor(x)
+
         if self.training:
             return None, self.losses(x, targets)
-        else:
-            x = F.interpolate(x, scale_factor=self.common_stride, mode="bilinear", align_corners=False)
-            return x, {}
+
+        return x, {}
 
     def losses(self, predictions, targets):
-        predictions = F.interpolate(predictions, scale_factor=self.common_stride, mode="bilinear", align_corners=False)
+        predictions = resize(predictions, size=targets.shape[1:], mode="bilinear", align_corners=False)
         loss = self.loss(predictions, targets)
         losses = {"loss_sem_seg": loss * self.loss_weight}
         return losses

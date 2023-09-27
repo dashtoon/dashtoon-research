@@ -141,6 +141,9 @@ class MultiGeneralizedRCNNDetector(nn.Module):
                 The :class:`Instances` object has the following keys:
                 "pred_boxes", "pred_classes", "scores", "pred_masks", "pred_keypoints"
         """
+        # ic([x["image"].shape for x in batched_inputs])
+        # ic([x["sem_seg"].shape for x in batched_inputs])
+
         if not self.training:
             return self.inference(batched_inputs)
 
@@ -150,7 +153,9 @@ class MultiGeneralizedRCNNDetector(nn.Module):
         else:
             gt_instances = None
 
+        # ic(images.tensor.shape)
         features = self.backbone(images.tensor)
+        # ic([f"{k}:{v.shape}" for k, v in features.items()])
 
         if self.proposal_generator is not None:
             proposals, proposal_losses = self.proposal_generator(images, features, gt_instances)
@@ -173,7 +178,7 @@ class MultiGeneralizedRCNNDetector(nn.Module):
             self.backbone.padding_constraints,
         ).tensor
 
-        _, sem_seg_losses = self.sem_seg_head(features, sem_seg_losses)
+        _, sem_seg_losses = self.sem_seg_head(features, sem_seg_targets)
 
         losses = {}
         losses.update(detector_losses)
@@ -221,17 +226,25 @@ class MultiGeneralizedRCNNDetector(nn.Module):
             detected_instances = [x.to(self.device) for x in detected_instances]
             results = self.roi_heads.forward_with_given_boxes(features, detected_instances)
 
-        if do_postprocess:
-            assert not torch.jit.is_scripting(), "Scripting is not supported for postprocess."
-            results = GeneralizedRCNN._postprocess(results, batched_inputs, images.image_sizes)
+        seg_results, _ = self.sem_seg_head(features, None)
 
-        for result, input_per_image, image_size in zip(results, batched_inputs, images.image_sizes):
+        outputs = []
+        for seg_result, result, input_per_image, image_size in zip(
+            seg_results, results, batched_inputs, images.image_sizes
+        ):
             height = input_per_image.get("height", image_size[0])
             width = input_per_image.get("width", image_size[1])
-            r = sem_seg_postprocess(result, image_size, height, width)
-            results.append({"sem_seg": r})
 
-        return results
+            r_seg = sem_seg_postprocess(seg_result, image_size, height, width)
+
+            if do_postprocess:
+                assert not torch.jit.is_scripting(), "Scripting is not supported for postprocess."
+                r_ins = detector_postprocess(result, height, width)
+            else:
+                r_ins = result
+
+            outputs.append({"sem_seg": r_seg, "instances": r_ins})
+        return outputs
 
     def preprocess_image(self, batched_inputs: List[Dict[str, torch.Tensor]]):
         """

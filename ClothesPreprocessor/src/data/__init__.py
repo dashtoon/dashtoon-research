@@ -1,2 +1,3 @@
+from .custom_build_augmentation import build_custom_augmentation
 from .dataset_mapper import DatasetMapper
-from .datasets import load_coco_json
+from .datasets import _PREDEFINED_SPLITS_COCO, load_coco_json

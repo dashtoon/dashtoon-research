@@ -30,6 +30,7 @@ from detectron2.engine import DefaultTrainer
 from detectron2.evaluation import (
     DatasetEvaluator,
     DatasetEvaluators,
+    SemSegEvaluator,
     inference_on_dataset,
     print_csv_format,
 )
@@ -39,9 +40,9 @@ from detectron2.solver.build import (
 )
 from detectron2.utils import comm
 from detectron2.utils.events import EventWriter, get_event_storage
-from torch import nn
-
 from src.data.dataset_mapper import DatasetMapper
+from src.solver import build_lr_scheduler
+from torch import nn
 
 
 class SampleCountingLoader:
@@ -171,7 +172,11 @@ class Trainer(DefaultTrainer):
         # elif evaluator_type == "lvis":
         #     evaluators.append(LVISEvaluator(dataset_name, output_dir=output_folder))
         evaluators.append(
-            Detectron2COCOEvaluatorAdapter(dataset_name, output_dir=output_folder, distributed=distributed)
+            Detectron2COCOEvaluatorAdapter(
+                dataset_name,
+                output_dir=output_folder,
+                distributed=distributed,
+            )
         )
         if cfg.MODEL.DENSEPOSE_ON:
             storage = build_densepose_evaluator_storage(cfg, output_folder)
@@ -188,6 +193,14 @@ class Trainer(DefaultTrainer):
                     mesh_alignment_mesh_names=cfg.DENSEPOSE_EVALUATION.MESH_ALIGNMENT_MESH_NAMES,
                 )
             )
+        # if cfg.MODEL.SEM_SEG_ON:
+        #     evaluators.append(
+        #         SemSegEvaluator(
+        #             dataset_name,
+        #             distributed,
+        #             output_folder,
+        #         )
+        #     )
         return DatasetEvaluators(evaluators)
 
     @classmethod
@@ -216,6 +229,14 @@ class Trainer(DefaultTrainer):
         )
         # pyre-fixme[6]: For 2nd param expected `Type[Optimizer]` but got `SGD`.
         return maybe_add_gradient_clipping(cfg, optimizer)
+
+    @classmethod
+    def build_lr_scheduler(cls, cfg, optimizer):
+        """
+        It now calls :func:`detectron2.solver.build_lr_scheduler`.
+        Overwrite it if you'd like a different scheduler.
+        """
+        return build_lr_scheduler(cfg, optimizer)
 
     @classmethod
     def build_test_loader(cls, cfg: CfgNode, dataset_name):

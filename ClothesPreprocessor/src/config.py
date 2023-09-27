@@ -28,7 +28,7 @@ def add_deeplab_config(cfg):
     cfg.MODEL.RESNETS.STEM_TYPE = "deeplab"
 
 
-def add_custom_config(cfg):
+def add_custom_config(cfg: CN):
     _C = cfg
 
     add_densepose_config(_C)
@@ -41,4 +41,15 @@ def add_custom_config(cfg):
     _C.MODEL.TIMMNETS.SCRIPTABLE = False
     _C.MODEL.TIMMNETS.OUT_FEATURES = []
     _C.MODEL.TIMMNETS.NORM = "FrozenBN"
+
     _C.MODEL.ROI_DENSEPOSE_HEAD.DECODER_ISSIMPLE = False
+
+    # for segmentation
+    _C.MODEL.SEM_SEG_ON = True
+
+    _C.INPUT.CUSTOM_AUG = ""
+    _C.INPUT.TRAIN_SIZE = 640
+    _C.INPUT.TEST_SIZE = 640
+    _C.INPUT.SCALE_RANGE = (0.1, 2.0)
+    # 'default' for fixed short/ long edge, 'square' for max size=INPUT.SIZE
+    _C.INPUT.TEST_INPUT_TYPE = "default"

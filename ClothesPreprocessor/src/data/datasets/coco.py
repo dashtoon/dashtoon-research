@@ -5,21 +5,26 @@ import logging
 import os
 from collections import defaultdict
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
-from fvcore.common.timer import Timer
-
-from detectron2.data import DatasetCatalog, MetadataCatalog
-from detectron2.structures import BoxMode
-from detectron2.utils.file_io import PathManager
-from detectron2.data.datasets.builtin_meta import COCO_PERSON_KEYPOINT_NAMES, COCO_PERSON_KEYPOINT_FLIP_MAP, KEYPOINT_CONNECTION_RULES
 
 from densepose.data.utils import maybe_prepend_base_path
-from pathlib import Path
+from detectron2.data import DatasetCatalog, MetadataCatalog
+from detectron2.data.datasets.builtin_meta import (
+    COCO_PERSON_KEYPOINT_FLIP_MAP,
+    COCO_PERSON_KEYPOINT_NAMES,
+    KEYPOINT_CONNECTION_RULES,
+)
+from detectron2.structures import BoxMode
+from detectron2.utils.file_io import PathManager
+from fvcore.common.timer import Timer
 
 DENSEPOSE_MASK_KEY = "dp_masks"
 DENSEPOSE_IUV_KEYS_WITHOUT_MASK = ["dp_x", "dp_y", "dp_I", "dp_U", "dp_V"]
 DENSEPOSE_CSE_KEYS_WITHOUT_MASK = ["dp_x", "dp_y", "dp_vertex", "ref_model"]
-DENSEPOSE_ALL_POSSIBLE_KEYS = set(DENSEPOSE_IUV_KEYS_WITHOUT_MASK + DENSEPOSE_CSE_KEYS_WITHOUT_MASK + [DENSEPOSE_MASK_KEY])
+DENSEPOSE_ALL_POSSIBLE_KEYS = set(
+    DENSEPOSE_IUV_KEYS_WITHOUT_MASK + DENSEPOSE_CSE_KEYS_WITHOUT_MASK + [DENSEPOSE_MASK_KEY]
+)
 DENSEPOSE_METADATA_URL_PREFIX = "https://dl.fbaipublicfiles.com/densepose/data/"
 
 
@@ -30,25 +35,6 @@ class MyDatasetInfo:
     annotations_fpath: str
     human_parse_annotations_fpath: str
     human_parse_image_suffix: str
-
-
-
-DATASETS = [
-    MyDatasetInfo(
-        name="densepose_coco_2014_train_cse",
-        images_root="coco/train2014",
-        annotations_fpath="coco/annotations/densepose_train2014_cse.json",
-        human_parse_annotations_fpath="coco/annotations/human_parsing",
-        human_parse_image_suffix=".png",
-    ),
-    MyDatasetInfo(
-        name="densepose_minival2014_cse",
-        images_root="coco/val2014",
-        annotations_fpath="coco/annotations/densepose_minival2014_cse.json",
-        human_parse_annotations_fpath="coco/annotations/human_parsing",
-        human_parse_image_suffix=".png",
-    ),
-]
 
 
 def get_metadata(base_path: Optional[str]) -> Dict[str, Any]:
@@ -68,11 +54,32 @@ def get_metadata(base_path: Optional[str]) -> Dict[str, Any]:
         "densepose_smpl_subdiv": maybe_prepend_base_path(base_path, "SMPL_subdiv.mat"),
         "densepose_smpl_subdiv_transform": maybe_prepend_base_path(base_path, "SMPL_SUBDIV_TRANSFORM.mat"),
         "num_sem_seg_classes": 20,
-        "thing_classes": ["person"],
-        "stuff_classes": ['Background', 'Hat', 'Hair', 'Glove', 'Sunglasses', 'Upper-clothes', 'Dress', 'Coat', 'Socks', 'Pants', 'Jumpsuits', 'Scarf', 'Skirt', 'Face', 'Left-arm', 'Right-arm', 'Left-leg', 'Right-leg', 'Left-shoe', 'Right-shoe'],
+        "stuff_classes": [
+            "Background",
+            "Hat",
+            "Hair",
+            "Glove",
+            "Sunglasses",
+            "Upper-clothes",
+            "Dress",
+            "Coat",
+            "Socks",
+            "Pants",
+            "Jumpsuits",
+            "Scarf",
+            "Skirt",
+            "Face",
+            "Left-arm",
+            "Right-arm",
+            "Left-leg",
+            "Right-leg",
+            "Left-shoe",
+            "Right-shoe",
+        ],
         "keypoint_names": COCO_PERSON_KEYPOINT_NAMES,
         "keypoint_flip_map": COCO_PERSON_KEYPOINT_FLIP_MAP,
         "keypoint_connection_rules": KEYPOINT_CONNECTION_RULES,
+        "ignore_label": 0,
     }
     return meta
 
@@ -113,9 +120,7 @@ def _verify_annotations_have_unique_ids(json_file: str, anns: List[List[Dict[str
         # Therefore we explicitly white-list them
         return
     ann_ids = [ann["id"] for anns_per_image in anns for ann in anns_per_image]
-    assert len(set(ann_ids)) == len(ann_ids), "Annotation ids in '{}' are not unique!".format(
-        json_file
-    )
+    assert len(set(ann_ids)) == len(ann_ids), "Annotation ids in '{}' are not unique!".format(json_file)
 
 
 def _maybe_add_bbox(obj: Dict[str, Any], ann_dict: Dict[str, Any]):
@@ -165,7 +170,6 @@ def _combine_images_with_annotations(
     img_datas: Iterable[Dict[str, Any]],
     ann_datas: Iterable[Iterable[Dict[str, Any]]],
 ):
-
     ann_keys = ["iscrowd", "category_id"]
     dataset_dicts = []
     contains_video_frame_info = False
@@ -173,21 +177,21 @@ def _combine_images_with_annotations(
     for img_dict, ann_dicts in zip(img_datas, ann_datas):
         record = {}
         record["file_name"] = os.path.join(image_root, img_dict["file_name"])
-        
+
         sem_seg_file_name = Path(os.path.basename(record["file_name"]))
         sem_seg_file_name = str(sem_seg_file_name).replace(sem_seg_file_name.suffix, human_parsing_image_ext)
         record["sem_seg_file_name"] = os.path.join(human_parsing_image_root, sem_seg_file_name)
-        
+
         record["height"] = img_dict["height"]
         record["width"] = img_dict["width"]
         record["image_id"] = img_dict["id"]
         record["dataset"] = dataset_name
-        
+
         if "frame_id" in img_dict:
             record["frame_id"] = img_dict["frame_id"]
             record["video_id"] = img_dict.get("vid_id", None)
             contains_video_frame_info = True
-        
+
         objs = []
         for ann_dict in ann_dicts:
             assert ann_dict["image_id"] == record["image_id"]
@@ -198,10 +202,10 @@ def _combine_images_with_annotations(
             _maybe_add_keypoints(obj, ann_dict)
             _maybe_add_densepose(obj, ann_dict)
             objs.append(obj)
-        
+
         record["annotations"] = objs
         dataset_dicts.append(record)
-    
+
     if contains_video_frame_info:
         create_video_frame_mapping(dataset_name, dataset_dicts)
     return dataset_dicts
@@ -282,9 +286,9 @@ def create_video_frame_mapping(dataset_name, dataset_dicts):
 
 
 def load_coco_json(
-    annotations_json_file: str, 
-    image_root: str, 
-    dataset_name: str, 
+    annotations_json_file: str,
+    image_root: str,
+    dataset_name: str,
     human_parsing_image_root: str,
     human_parse_image_suffix: str,
 ):
@@ -327,5 +331,69 @@ def load_coco_json(
     # and the outer list enumerates over images.
     anns = [coco_api.imgToAnns[img_id] for img_id in img_ids]
     _verify_annotations_have_unique_ids(annotations_json_file, anns)
-    dataset_records = _combine_images_with_annotations(dataset_name, image_root, human_parsing_image_root, human_parse_image_suffix, imgs, anns)
+    dataset_records = _combine_images_with_annotations(
+        dataset_name, image_root, human_parsing_image_root, human_parse_image_suffix, imgs, anns
+    )
     return dataset_records
+
+
+_PREDEFINED_SPLITS_COCO = {
+    "my_densepose_coco_2014_train_cse": MyDatasetInfo(
+        name="my_densepose_coco_2014_train_cse",
+        images_root="coco/train2014",
+        annotations_fpath="coco/annotations/densepose_train2014_cse.json",
+        human_parse_annotations_fpath="coco/annotations/human_parsing",
+        human_parse_image_suffix=".png",
+    ),
+    "my_densepose_minival2014_cse": MyDatasetInfo(
+        name="my_densepose_minival2014_cse",
+        images_root="coco/val2014",
+        annotations_fpath="coco/annotations/densepose_minival2014_cse.json",
+        human_parse_annotations_fpath="coco/annotations/human_parsing",
+        human_parse_image_suffix=".png",
+    ),
+    "my_densepose_valminusminival2014_cse": MyDatasetInfo(
+        name="my_densepose_valminusminival2014_cse",
+        images_root="coco/val2014",
+        annotations_fpath="coco/annotations/densepose_valminusminival2014_cse.json",
+        human_parse_annotations_fpath="coco/annotations/human_parsing",
+        human_parse_image_suffix=".png",
+    ),
+}
+
+
+def register_dataset(dataset_name: str, dataset_data: MyDatasetInfo, datasets_root: Optional[str] = None):
+    """
+    Registers provided COCO DensePose dataset
+
+    Args:
+    dataset_data: CocoDatasetInfo
+        Dataset data
+    datasets_root: Optional[str]
+        Datasets root folder (default: None)
+    """
+    annotations_fpath = maybe_prepend_base_path(datasets_root, dataset_data.annotations_fpath)
+    images_root = maybe_prepend_base_path(datasets_root, dataset_data.images_root)
+    human_parse_annotations_fpath = maybe_prepend_base_path(datasets_root, dataset_data.human_parse_annotations_fpath)
+
+    def load_annotations():
+        return load_coco_json(
+            annotations_json_file=annotations_fpath,
+            human_parsing_image_root=human_parse_annotations_fpath,
+            human_parse_image_suffix=dataset_data.human_parse_image_suffix,
+            image_root=images_root,
+            dataset_name=dataset_data.name,
+        )
+
+    DatasetCatalog.register(dataset_name, load_annotations)
+    MetadataCatalog.get(dataset_name).set(
+        json_file=annotations_fpath,
+        image_root=images_root,
+        **get_metadata(DENSEPOSE_METADATA_URL_PREFIX),
+    )
+
+
+DEFAULT_DATASETS_ROOT = "/mnt/data/repos/dashtoon-research/ClothesPreprocessor/datasets"
+
+for key, info in _PREDEFINED_SPLITS_COCO.items():
+    register_dataset(key, info, DEFAULT_DATASETS_ROOT)
