@@ -4,7 +4,6 @@ MODEL:
   PIXEL_STD: [58.395, 57.120, 57.375]
 
   META_ARCHITECTURE: "MultiGeneralizedRCNNDetector"
-  KEYPOINT_ON: True
 
   BACKBONE:
     NAME: "build_timm_bifpn_backbone"
@@ -30,6 +29,7 @@ MODEL:
     POST_NMS_TOPK_TEST: 1000
 
   DENSEPOSE_ON: True
+  KEYPOINT_ON: True
 
   ROI_HEADS:
     NAME: "DensePoseROIHeads"
