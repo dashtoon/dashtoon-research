@@ -1,0 +1,98 @@
+VERSION: 2
+MODEL:
+  META_ARCHITECTURE: "MultiGeneralizedRCNNDetector"
+  BACKBONE:
+    NAME: "build_timm_bifp_backbone"
+  TIMMNETS:
+    NAME: "efficientnetv2_rw_s"
+    OUT_FEATURES: [2, 3, 4]
+    PRETRAINED: True
+    BACKBONE_ARGS:
+      drop_path_rate: 0.2
+    NORM: "FrozenBN"
+  BIFPN:
+    NUM_LEVELS: 5
+    NUM_BIFPN: 6
+    NORM: "BN"
+    OUT_CHANNELS: 256
+    SEPARABLE_CONV: True
+  ANCHOR_GENERATOR:
+    SIZES: [[32], [64], [128], [256], [512]] # One size for each in feature map
+    ASPECT_RATIOS: [[0.5, 1.0, 2.0]] # Three aspect ratios (same for all in feature maps)
+  RPN:
+    IN_FEATURES: ["p3", "p4", "p5", "p6", "p7"]
+    PRE_NMS_TOPK_TRAIN: 2000
+    PRE_NMS_TOPK_TEST: 1000
+    POST_NMS_TOPK_TRAIN: 1500
+    POST_NMS_TOPK_TEST: 1000
+  DENSEPOSE_ON: True
+  KEYPOINT_ON: True
+  ROI_HEADS:
+    NAME: "DensePoseROIHeads"
+    IN_FEATURES: ["p3", "p4", "p5", "p6"]
+    NUM_CLASSES: 1
+  ROI_BOX_HEAD:
+    NAME: "FastRCNNConvFCHead"
+    NUM_FC: 2
+    POOLER_RESOLUTION: 7
+    POOLER_SAMPLING_RATIO: 2
+    POOLER_TYPE: "ROIAlign"
+    SMOOTH_L1_BETA: 0.5 # Keypoint AP degrades (though box AP improves) when using plain L1 loss
+  ROI_DENSEPOSE_HEAD:
+    NAME: "DensePoseV1ConvXHead"
+    POOLER_TYPE: "ROIAlign"
+    NUM_COARSE_SEGM_CHANNELS: 2
+    PREDICTOR_NAME: "DensePoseEmbeddingPredictor"
+    LOSS_NAME: "DensePoseCseLoss"
+    CSE:
+      EMBED_LOSS_NAME: "EmbeddingLoss"
+      EMBEDDERS:
+        "smpl_27554":
+          TYPE: vertex_feature
+          NUM_VERTICES: 27554
+          FEATURE_DIM: 256
+          FEATURES_TRAINABLE: False
+          IS_TRAINABLE: True
+          INIT_FILE: "https://dl.fbaipublicfiles.com/densepose/data/cse/lbo/phi_smpl_27554_256.pkl"
+  SEM_SEG_HEAD:
+    NAME: "SegformerHead"
+    IN_FEATURES: ["p3", "p4", "p5", "p6", "p7"]
+    IGNORE_VALUE: 0
+    NUM_CLASSES: 20
+    CONVS_DIM: 256
+    COMMON_STRIDE: 8
+    NORM: "BN"
+    LOSS_WEIGHT: 1.0
+    DROPOUT_RATIO: 0.1
+
+SOLVER:
+  IMS_PER_BATCH: 16
+  LR_SCHEDULER_NAME: "WarmupCosineLR"
+  BASE_LR: 0.00125
+  BASE_LR_END: 0.0
+  MAX_ITER: 130000
+  WARMUP_FACTOR: 0.1
+  CLIP_GRADIENTS:
+    CLIP_TYPE: norm
+    CLIP_VALUE: 1.0
+    ENABLED: true
+    NORM_TYPE: 2.0
+INPUT:
+  MIN_SIZE_TRAIN: (640, 672, 704, 736, 768, 800)
+DENSEPOSE_EVALUATION:
+  TYPE: cse
+  STORAGE: file
+DATASETS:
+  TRAIN:
+  - "my_densepose_coco_2014_train_cse"
+  - "my_densepose_coco_valminusminival2014_cse"
+  TEST:
+  - "my_densepose_coco_minival2014_cse"
+  CLASS_TO_MESH_NAME_MAPPING:
+    "0": "smpl_27554"
+VIS_PERIOD: 20
+
+DATALOADER:
+  NUM_WORKERS: 16
+
+SEED: 9269883

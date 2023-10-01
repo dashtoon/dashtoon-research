@@ -193,14 +193,7 @@ class Trainer(DefaultTrainer):
                     mesh_alignment_mesh_names=cfg.DENSEPOSE_EVALUATION.MESH_ALIGNMENT_MESH_NAMES,
                 )
             )
-        # if cfg.MODEL.SEM_SEG_ON:
-        #     evaluators.append(
-        #         SemSegEvaluator(
-        #             dataset_name,
-        #             distributed,
-        #             output_folder,
-        #         )
-        #     )
+        evaluators.append(SemSegEvaluator(dataset_name, distributed, output_folder))
         return DatasetEvaluators(evaluators)
 
     @classmethod

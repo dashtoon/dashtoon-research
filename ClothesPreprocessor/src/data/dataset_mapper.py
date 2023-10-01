@@ -83,9 +83,12 @@ class DatasetMapper:
         utils.check_image_size(dataset_dict, image)
 
         if "sem_seg_file_name" in dataset_dict and self.is_train:
-            sem_seg_gt = utils.read_image(dataset_dict.pop("sem_seg_file_name"), "L").squeeze(2)
+            sem_seg_gt = utils.read_image(dataset_dict.pop("sem_seg_file_name"), None)
         else:
             sem_seg_gt = None
+
+        # import numpy as np
+        # ic(np.unique(sem_seg_gt), sem_seg_gt.shape)
 
         aug_input = T.AugInput(image, sem_seg=sem_seg_gt)
         aug_input, transforms = T.apply_transform_gens(self.augmentation, aug_input)

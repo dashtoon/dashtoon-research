@@ -1,306 +1,577 @@
-import logging
-from typing import Callable, List, Union
+# Modified from https://github.com/rwightman/efficientdet-pytorch/blob/master/effdet/efficientdet.py
+# The original file is under Apache-2.0 License
+import math
+import sys
+from collections import OrderedDict
+from os.path import join
+from typing import Callable, List
 
-import timm
+import fvcore.nn.weight_init as weight_init
+import numpy as np
 import torch
-import torch.distributed as dist
-import torch.nn as nn
 import torch.nn.functional as F
-from detectron2.layers import (
-    BatchNorm2d,
-    FrozenBatchNorm2d,
-    NaiveSyncBatchNorm,
-    ShapeSpec,
-    get_norm,
-)
-from detectron2.modeling import BACKBONE_REGISTRY, Backbone
-from detectron2.modeling.backbone.fpn import LastLevelMaxPool
-from timm.models._efficientnet_builder import BN_EPS_TF_DEFAULT, BN_MOMENTUM_TF_DEFAULT
+import torch.utils.model_zoo as model_zoo
+from detectron2.layers import Conv2d, ShapeSpec
+from detectron2.layers.batch_norm import get_norm
+from detectron2.modeling.backbone import Backbone
+from detectron2.modeling.backbone.build import BACKBONE_REGISTRY
+from detectron2.modeling.backbone.resnet import build_resnet_backbone
+from torch import nn
 
-logger = logging.getLogger(__name__)
+from .timm_d2 import build_timm_backbone
 
-__all__ = ["BiFPN", "build_timm_backbone"]
+# sys.path.append("/mnt/data/repos/dashtoon-research/ClothesPreprocessor/")
+# from src.modelling.backbone.timm_d2 import build_timm_backbone
 
 
-def get_world_size() -> int:
-    if not dist.is_available():
-        return 1
-    if not dist.is_initialized():
-        return 1
-    return dist.get_world_size()
+def get_fpn_config(base_reduction=8):
+    """BiFPN config with sum."""
+    p = {
+        "nodes": [
+            {"reduction": base_reduction << 3, "inputs_offsets": [3, 4]},
+            {"reduction": base_reduction << 2, "inputs_offsets": [2, 5]},
+            {"reduction": base_reduction << 1, "inputs_offsets": [1, 6]},
+            {"reduction": base_reduction, "inputs_offsets": [0, 7]},
+            {"reduction": base_reduction << 1, "inputs_offsets": [1, 7, 8]},
+            {"reduction": base_reduction << 2, "inputs_offsets": [2, 6, 9]},
+            {"reduction": base_reduction << 3, "inputs_offsets": [3, 5, 10]},
+            {"reduction": base_reduction << 4, "inputs_offsets": [4, 11]},
+        ],
+        "weight_method": "fastattn",
+    }
+    return p
 
 
-class DepthwiseSeparableConv2d(nn.Sequential):
+def swish(x, inplace: bool = False):
+    """Swish - Described in: https://arxiv.org/abs/1710.05941"""
+    return x.mul_(x.sigmoid()) if inplace else x.mul(x.sigmoid())
+
+
+class Swish(nn.Module):
+    def __init__(self, inplace: bool = False):
+        super(Swish, self).__init__()
+        self.inplace = inplace
+
+    def forward(self, x):
+        return swish(x, self.inplace)
+
+
+class SequentialAppend(nn.Sequential):
+    def __init__(self, *args):
+        super(SequentialAppend, self).__init__(*args)
+
+    def forward(self, x):
+        for module in self:
+            x.append(module(x))
+        return x
+
+
+class SequentialAppendLast(nn.Sequential):
+    def __init__(self, *args):
+        super(SequentialAppendLast, self).__init__(*args)
+
+    # def forward(self, x: List[torch.Tensor]):
+    def forward(self, x):
+        for module in self:
+            x.append(module(x[-1]))
+        return x
+
+
+class ConvBnAct2d(nn.Module):
     def __init__(
         self,
         in_channels,
         out_channels,
         kernel_size,
         stride=1,
-        padding=0,
         dilation=1,
-        bias=True,
+        padding="",
+        bias=False,
+        norm="",
+        act_layer=Swish,
     ):
-        dephtwise_conv = nn.Conv2d(
+        super(ConvBnAct2d, self).__init__()
+        # self.conv = create_conv2d(
+        #     in_channels, out_channels, kernel_size, stride=stride, dilation=dilation, padding=padding, bias=bias)
+        self.conv = Conv2d(
             in_channels,
             out_channels,
-            kernel_size,
+            kernel_size=kernel_size,
             stride=stride,
-            padding=padding,
-            dilation=dilation,
-            groups=in_channels,
-            bias=False,
+            padding=kernel_size // 2,
+            bias=(norm == ""),
         )
-        pointwise_conv = nn.Conv2d(
-            out_channels,
-            out_channels,
-            kernel_size=1,
+        self.bn = get_norm(norm, out_channels)
+        self.act = None if act_layer is None else act_layer(inplace=True)
+
+    def forward(self, x):
+        x = self.conv(x)
+        if self.bn is not None:
+            x = self.bn(x)
+        if self.act is not None:
+            x = self.act(x)
+        return x
+
+
+class SeparableConv2d(nn.Module):
+    """Separable Conv"""
+
+    def __init__(
+        self,
+        in_channels,
+        out_channels,
+        kernel_size=3,
+        stride=1,
+        dilation=1,
+        padding="",
+        bias=False,
+        channel_multiplier=1.0,
+        pw_kernel_size=1,
+        act_layer=Swish,
+        norm="",
+    ):
+        super(SeparableConv2d, self).__init__()
+
+        # self.conv_dw = create_conv2d(
+        #     in_channels, int(in_channels * channel_multiplier), kernel_size,
+        #     stride=stride, dilation=dilation, padding=padding, depthwise=True)
+
+        self.conv_dw = Conv2d(
+            in_channels,
+            int(in_channels * channel_multiplier),
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=kernel_size // 2,
             bias=bias,
+            groups=out_channels,
         )
-        super().__init__(dephtwise_conv, pointwise_conv)
+        # print('conv_dw', kernel_size, stride)
+        # self.conv_pw = create_conv2d(
+        #     int(in_channels * channel_multiplier), out_channels, pw_kernel_size, padding=padding, bias=bias)
+
+        self.conv_pw = Conv2d(
+            int(in_channels * channel_multiplier),
+            out_channels,
+            kernel_size=pw_kernel_size,
+            padding=pw_kernel_size // 2,
+            bias=(norm == ""),
+        )
+        # print('conv_pw', pw_kernel_size)
+
+        self.bn = get_norm(norm, out_channels)
+        self.act = None if act_layer is None else act_layer(inplace=True)
+
+    def forward(self, x):
+        x = self.conv_dw(x)
+        x = self.conv_pw(x)
+        if self.bn is not None:
+            x = self.bn(x)
+        if self.act is not None:
+            x = self.act(x)
+        return x
 
 
-class Conv3x3BnReLU(nn.Sequential):
-    def __init__(self, in_channels, stride=1):
-        conv = DepthwiseSeparableConv2d(
-            in_channels,
-            in_channels,
-            kernel_size=3,
-            bias=False,
-            padding=1,
-            stride=stride,
-        )
-        if get_world_size() > 1:
-            bn = nn.SyncBatchNorm(in_channels, momentum=0.03)
+class ResampleFeatureMap(nn.Sequential):
+    def __init__(
+        self,
+        in_channels,
+        out_channels,
+        reduction_ratio=1.0,
+        pad_type="",
+        pooling_type="max",
+        norm="",
+        apply_bn=False,
+        conv_after_downsample=False,
+        redundant_bias=False,
+    ):
+        super(ResampleFeatureMap, self).__init__()
+        pooling_type = pooling_type or "max"
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.reduction_ratio = reduction_ratio
+        self.conv_after_downsample = conv_after_downsample
+
+        conv = None
+        if in_channels != out_channels:
+            conv = ConvBnAct2d(
+                in_channels,
+                out_channels,
+                kernel_size=1,
+                padding=pad_type,
+                norm=norm if apply_bn else "",
+                bias=not apply_bn or redundant_bias,
+                act_layer=None,
+            )
+
+        if reduction_ratio > 1:
+            stride_size = int(reduction_ratio)
+            if conv is not None and not self.conv_after_downsample:
+                self.add_module("conv", conv)
+            self.add_module(
+                "downsample",
+                # create_pool2d(
+                #     pooling_type, kernel_size=stride_size + 1, stride=stride_size, padding=pad_type)
+                # nn.MaxPool2d(kernel_size=stride_size + 1, stride=stride_size, padding=pad_type)
+                nn.MaxPool2d(kernel_size=stride_size, stride=stride_size),
+            )
+            if conv is not None and self.conv_after_downsample:
+                self.add_module("conv", conv)
         else:
-            bn = nn.BatchNorm2d(in_channels, momentum=0.03)
-        relu = nn.ReLU(inplace=True)
-        super().__init__(conv, bn, relu)
+            if conv is not None:
+                self.add_module("conv", conv)
+            if reduction_ratio < 1:
+                scale = int(1 // reduction_ratio)
+                self.add_module("upsample", nn.UpsamplingNearest2d(scale_factor=scale))
 
 
-class FastNormalizedFusion(nn.Module):
-    def __init__(self, in_nodes):
-        super().__init__()
-        self.in_nodes = in_nodes
-        self.weight = nn.Parameter(torch.ones(in_nodes, dtype=torch.float32))
-        self.register_buffer("eps", torch.tensor(0.0001))
+class FpnCombine(nn.Module):
+    def __init__(
+        self,
+        feature_info,
+        fpn_config,
+        fpn_channels,
+        inputs_offsets,
+        target_reduction,
+        pad_type="",
+        pooling_type="max",
+        norm="",
+        apply_bn_for_resampling=False,
+        conv_after_downsample=False,
+        redundant_bias=False,
+        weight_method="attn",
+    ):
+        super(FpnCombine, self).__init__()
+        self.inputs_offsets = inputs_offsets
+        self.weight_method = weight_method
 
-    def forward(self, x: List[torch.Tensor]):
-        if len(x) != self.in_nodes:
-            raise RuntimeError("Expected to have {} input nodes, but have {}.".format(self.in_nodes, len(x)))
+        self.resample = nn.ModuleDict()
+        for idx, offset in enumerate(inputs_offsets):
+            in_channels = fpn_channels
+            if offset < len(feature_info):
+                in_channels = feature_info[offset]["num_chs"]
+                input_reduction = feature_info[offset]["reduction"]
+            else:
+                node_idx = offset - len(feature_info)
+                # print('node_idx, len', node_idx, len(fpn_config['nodes']))
+                input_reduction = fpn_config["nodes"][node_idx]["reduction"]
+            reduction_ratio = target_reduction / input_reduction
+            self.resample[str(offset)] = ResampleFeatureMap(
+                in_channels,
+                fpn_channels,
+                reduction_ratio=reduction_ratio,
+                pad_type=pad_type,
+                pooling_type=pooling_type,
+                norm=norm,
+                apply_bn=apply_bn_for_resampling,
+                conv_after_downsample=conv_after_downsample,
+                redundant_bias=redundant_bias,
+            )
 
-        # where wi ≥ 0 is ensured by applying a relu after each wi (paper)
-        weight = F.relu(self.weight)
-        x_sum = 0
-        for xi, wi in zip(x, weight):
-            x_sum = x_sum + xi * wi
-        normalized_weighted_x = x_sum / (weight.sum() + self.eps)
-        return normalized_weighted_x
+        if weight_method == "attn" or weight_method == "fastattn":
+            # WSM
+            self.edge_weights = nn.Parameter(torch.ones(len(inputs_offsets)), requires_grad=True)
+        else:
+            self.edge_weights = None
+
+    def forward(self, x):
+        dtype = x[0].dtype
+        nodes = []
+        for offset in self.inputs_offsets:
+            input_node = x[offset]
+            input_node = self.resample[str(offset)](input_node)
+            nodes.append(input_node)
+
+        if self.weight_method == "attn":
+            normalized_weights = torch.softmax(self.edge_weights.type(dtype), dim=0)
+            x = torch.stack(nodes, dim=-1) * normalized_weights
+        elif self.weight_method == "fastattn":
+            edge_weights = nn.functional.relu(self.edge_weights.type(dtype))
+            weights_sum = torch.sum(edge_weights)
+            x = torch.stack([(nodes[i] * edge_weights[i]) / (weights_sum + 0.0001) for i in range(len(nodes))], dim=-1)
+        elif self.weight_method == "sum":
+            x = torch.stack(nodes, dim=-1)
+        else:
+            raise ValueError("unknown weight_method {}".format(self.weight_method))
+        x = torch.sum(x, dim=-1)
+        return x
+
+
+class BiFpnLayer(nn.Module):
+    def __init__(
+        self,
+        feature_info,
+        fpn_config,
+        fpn_channels,
+        num_levels=5,
+        pad_type="",
+        pooling_type="max",
+        norm="",
+        act_layer=Swish,
+        apply_bn_for_resampling=False,
+        conv_after_downsample=True,
+        conv_bn_relu_pattern=False,
+        separable_conv=True,
+        redundant_bias=False,
+    ):
+        super(BiFpnLayer, self).__init__()
+        self.fpn_config = fpn_config
+        self.num_levels = num_levels
+        self.conv_bn_relu_pattern = False
+
+        self.feature_info = []
+        self.fnode = SequentialAppend()
+        for i, fnode_cfg in enumerate(fpn_config["nodes"]):
+            # logging.debug('fnode {} : {}'.format(i, fnode_cfg))
+            # print('fnode {} : {}'.format(i, fnode_cfg))
+            fnode_layers = OrderedDict()
+
+            # combine features
+            reduction = fnode_cfg["reduction"]
+            fnode_layers["combine"] = FpnCombine(
+                feature_info,
+                fpn_config,
+                fpn_channels,
+                fnode_cfg["inputs_offsets"],
+                target_reduction=reduction,
+                pad_type=pad_type,
+                pooling_type=pooling_type,
+                norm=norm,
+                apply_bn_for_resampling=apply_bn_for_resampling,
+                conv_after_downsample=conv_after_downsample,
+                redundant_bias=redundant_bias,
+                weight_method=fpn_config["weight_method"],
+            )
+            self.feature_info.append(dict(num_chs=fpn_channels, reduction=reduction))
+
+            # after combine ops
+            after_combine = OrderedDict()
+            if not conv_bn_relu_pattern:
+                after_combine["act"] = act_layer(inplace=True)
+                conv_bias = redundant_bias
+                conv_act = None
+            else:
+                conv_bias = False
+                conv_act = act_layer
+            conv_kwargs = dict(
+                in_channels=fpn_channels,
+                out_channels=fpn_channels,
+                kernel_size=3,
+                padding=pad_type,
+                bias=conv_bias,
+                norm=norm,
+                act_layer=conv_act,
+            )
+            after_combine["conv"] = SeparableConv2d(**conv_kwargs) if separable_conv else ConvBnAct2d(**conv_kwargs)
+            fnode_layers["after_combine"] = nn.Sequential(after_combine)
+
+            self.fnode.add_module(str(i), nn.Sequential(fnode_layers))
+
+        self.feature_info = self.feature_info[-num_levels::]
+
+    def forward(self, x):
+        x = self.fnode(x)
+        return x[-self.num_levels : :]
 
 
 class BiFPN(Backbone):
-    """
-    This module implements Feature Pyramid Network.
-    It creates pyramid features built on top of some input feature maps.
-    """
+    def __init__(
+        self,
+        cfg,
+        bottom_up,
+        in_features,
+        out_channels,
+        norm="",
+        num_levels=5,
+        num_bifpn=4,
+        separable_conv=False,
+    ):
+        super(BiFPN, self).__init__()
 
-    def __init__(self, bottom_up, out_channels, top_block=None):
-        super().__init__()
-
+        self.num_levels = num_levels
+        self.num_bifpn = num_bifpn
         self.bottom_up = bottom_up
-        self.top_block = top_block
+        self.in_features = in_features
+        self._size_divisibility = 128
 
-        self.l5 = nn.Conv2d(bottom_up.feature_info[4]["num_chs"], out_channels, kernel_size=1)
-        self.l4 = nn.Conv2d(bottom_up.feature_info[3]["num_chs"], out_channels, kernel_size=1)
-        self.l3 = nn.Conv2d(bottom_up.feature_info[2]["num_chs"], out_channels, kernel_size=1)
-        self.l2 = nn.Conv2d(bottom_up.feature_info[1]["num_chs"], out_channels, kernel_size=1)
+        # Feature map strides and channels from the bottom up network (e.g. ResNet)
+        if isinstance(bottom_up, Backbone):
+            input_shapes = bottom_up.output_shape()
+            in_strides = [input_shapes[f].stride for f in in_features]
+            in_channels = [input_shapes[f].channels for f in in_features]
+            feature_info = [
+                {"num_chs": in_channels[level], "reduction": in_strides[level]}
+                for level in range(len(self.in_features))
+            ]
+        else:
+            feature_info = self.get_feature_info(bottom_up)
+            in_strides = [info["reduction"] for info in feature_info]
+            in_channels = [info["num_chs"] for info in feature_info]
 
-        self.p4_tr = Conv3x3BnReLU(out_channels)
-        self.p3_tr = Conv3x3BnReLU(out_channels)
-
-        self.up = nn.Upsample(scale_factor=2, mode="nearest")
-
-        self.fuse_p4_tr = FastNormalizedFusion(in_nodes=2)
-        self.fuse_p3_tr = FastNormalizedFusion(in_nodes=2)
-
-        self.down_p2 = Conv3x3BnReLU(out_channels, stride=2)
-        self.down_p3 = Conv3x3BnReLU(out_channels, stride=2)
-        self.down_p4 = Conv3x3BnReLU(out_channels, stride=2)
-
-        self.fuse_p5_out = FastNormalizedFusion(in_nodes=2)
-        self.fuse_p4_out = FastNormalizedFusion(in_nodes=3)
-        self.fuse_p3_out = FastNormalizedFusion(in_nodes=3)
-        self.fuse_p2_out = FastNormalizedFusion(in_nodes=2)
-
-        self.p5_out = Conv3x3BnReLU(out_channels)
-        self.p4_out = Conv3x3BnReLU(out_channels)
-        self.p3_out = Conv3x3BnReLU(out_channels)
-        self.p2_out = Conv3x3BnReLU(out_channels)
-
-        self._out_features = ["p2", "p3", "p4", "p5", "p6"]
+        levels = [int(math.log2(s)) for s in in_strides]
+        self._out_feature_strides = {"p{}".format(int(math.log2(s))): s for s in in_strides}
+        if len(in_features) < num_levels:
+            for l in range(num_levels - len(in_features)):
+                s = l + levels[-1]
+                self._out_feature_strides["p{}".format(s + 1)] = 2 ** (s + 1)
+        self._out_features = list(sorted(self._out_feature_strides.keys()))
         self._out_feature_channels = {k: out_channels for k in self._out_features}
-        self._size_divisibility = 32
-        self._out_feature_strides = {}
-        for k, name in enumerate(self._out_features):
-            self._out_feature_strides[name] = 2 ** (k + 2)
+
+        # print('self._out_feature_strides', self._out_feature_strides)
+        # print('self._out_feature_channels', self._out_feature_channels)
+
+        # self.config = config
+        fpn_config = get_fpn_config()
+        self.resample = SequentialAppendLast()
+        for level in range(num_levels):
+            if level < len(feature_info):
+                in_chs = in_channels[level]  # feature_info[level]['num_chs']
+                reduction = in_strides[level]  # feature_info[level]['reduction']
+            else:
+                # Adds a coarser level by downsampling the last feature map
+                reduction_ratio = 2
+                self.resample.add_module(
+                    str(level),
+                    ResampleFeatureMap(
+                        in_channels=in_chs,
+                        out_channels=out_channels,
+                        pad_type="same",
+                        pooling_type=None,
+                        norm=norm,
+                        reduction_ratio=reduction_ratio,
+                        apply_bn=True,
+                        conv_after_downsample=False,
+                        redundant_bias=False,
+                    ),
+                )
+                in_chs = out_channels
+                reduction = int(reduction * reduction_ratio)
+                feature_info.append(dict(num_chs=in_chs, reduction=reduction))
+
+        self.cell = nn.Sequential()
+        for rep in range(self.num_bifpn):
+            # logging.debug('building cell {}'.format(rep))
+            # print('building cell {}'.format(rep))
+            fpn_layer = BiFpnLayer(
+                feature_info=feature_info,
+                fpn_config=fpn_config,
+                fpn_channels=out_channels,
+                num_levels=self.num_levels,
+                pad_type="same",
+                pooling_type=None,
+                norm=norm,
+                act_layer=Swish,
+                separable_conv=separable_conv,
+                apply_bn_for_resampling=True,
+                conv_after_downsample=False,
+                conv_bn_relu_pattern=False,
+                redundant_bias=False,
+            )
+            self.cell.add_module(str(rep), fpn_layer)
+            feature_info = fpn_layer.feature_info
+        # import pdb; pdb.set_trace()
+
+    def get_feature_info(self, backbone):
+        if isinstance(backbone.feature_info, Callable):
+            # old accessor for timm versions <= 0.1.30, efficientnet and mobilenetv3 and related nets only
+            feature_info = [
+                dict(num_chs=f["num_chs"], reduction=f["reduction"]) for i, f in enumerate(backbone.feature_info())
+            ]
+        else:
+            # new feature info accessor, timm >= 0.2, all models supported
+            feature_info = backbone.feature_info.get_dicts(keys=["num_chs", "reduction"])
+        return feature_info
 
     @property
     def size_divisibility(self):
         return self._size_divisibility
 
     def forward(self, x):
-        p2, p3, p4, p5 = self.bottom_up(x)
-        # ic(p2.shape, p3.shape, p4.shape, p5.shape)
-
-        if self.training:
-            _dummy = sum(x.view(-1)[0] for x in self.bottom_up.parameters()) * 0.0
-            p5 = p5 + _dummy
-
-        p5 = self.l5(p5)
-        p4 = self.l4(p4)
-        p3 = self.l3(p3)
-        p2 = self.l2(p2)
-
-        p4_tr = self.p4_tr(self.fuse_p4_tr([p4, self.up(p5)]))
-        p3_tr = self.p3_tr(self.fuse_p3_tr([p3, self.up(p4_tr)]))
-
-        p2_out = self.p2_out(self.fuse_p2_out([p2, self.up(p3_tr)]))
-        p3_out = self.p3_out(self.fuse_p3_out([p3, p3_tr, self.down_p2(p2_out)]))
-        p4_out = self.p4_out(self.fuse_p4_out([p4, p4_tr, self.down_p3(p3_out)]))
-        p5_out = self.p5_out(self.fuse_p5_out([p5, self.down_p4(p4_out)]))
-
-        return {"p2": p2_out, "p3": p3_out, "p4": p4_out, "p5": p5_out, "p6": self.top_block(p5_out)[0]}
-
-    def output_shape(self):
-        return {
-            name: ShapeSpec(channels=self._out_feature_channels[name], stride=self._out_feature_strides[name])
-            for name in self._out_features
-        }
+        # print('input shapes', x.shape)
+        bottom_up_features = self.bottom_up(x)
+        x = [bottom_up_features[f] for f in self.in_features]
+        assert len(self.resample) == self.num_levels - len(x)
+        x = self.resample(x)
+        shapes = [xx.shape for xx in x]
+        # print('resample shapes', shapes)
+        x = self.cell(x)
+        out = {f: xx for f, xx in zip(self._out_features, x)}
+        # import pdb; pdb.set_trace()
+        return out
 
 
 @BACKBONE_REGISTRY.register()
-def build_timm_backbone(cfg, input_shape):
-    """
-    Create a TimmNet instance from config.
-
-    Returns:
-        TimmNet: a :class:`TimmNet` instance.
-    """
-    norm = cfg.MODEL.TIMMNETS.NORM
-    out_features = cfg.MODEL.TIMMNETS.OUT_FEATURES
-    model_name = cfg.MODEL.TIMMNETS.NAME
-    pretrained = cfg.MODEL.TIMMNETS.PRETRAINED
-    scriptable = cfg.MODEL.TIMMNETS.SCRIPTABLE
-    exportable = cfg.MODEL.TIMMNETS.EXPORTABLE
-    # output_stride = cfg.MODEL.TIMMNETS.OUTPUT_STRIDE
-
-    # GET MODEL BY NAME
-    model = timm.create_model(
-        model_name,
-        pretrained,
-        features_only=True,
-        out_indices=out_features,
-        scriptable=scriptable,
-        exportable=exportable,
-        feature_location="expansion",
-        # output_stride=output_stride,
-    )
-
-    # LOAD MODEL AND CONVERT NORM
-    # NOTE: why I use if/else: see the strange function _load_from_state_dict in FrozenBatchNorm2d
-    assert norm in ["FrozenBN", "SyncBN", "BN"]
-    if norm == "FrozenBN":
-        model = FrozenBatchNorm2d.convert_frozen_batchnorm(model)
-    elif pretrained:
-        model = convert_norm_to_detectron2_format(model, norm)
-    else:
-        model = convert_norm_to_detectron2_format(model, norm, init_default=True)
-
-    # USE TENSORFLOW EPS, MOMENTUM defaults if model is tf pretrained
-    if "tf" in model_name:
-        model = convert_norm_eps_momentum_to_tf_defaults(model)
-
-    # FREEZE FIRST 2 LAYERS
-    max_block_number = int(model.feature_info[1]["module"][7:8])
-    # max_block_number = int(model.feature_info[1]['name'][7:8])
-    logger.info(f"Freezing stem and first {max_block_number + 1} backbone blocks")
-    for p in model.conv_stem.parameters():
-        p.requires_grad = False
-    model.bn1 = FrozenBatchNorm2d.convert_frozen_batchnorm(model.bn1)
-    for block_number in range(0, max_block_number + 1):
-        for p in model.blocks[block_number].parameters():
-            p.requires_grad = False
-        model.blocks[block_number] = FrozenBatchNorm2d.convert_frozen_batchnorm(model.blocks[block_number])
-
-    return model
-
-
-@BACKBONE_REGISTRY.register()
-def build_timm_bifpn_backbone(cfg, input_shape: ShapeSpec):
+def build_resnet_bifpn_backbone(cfg, input_shape: ShapeSpec):
     """
     Args:
         cfg: a detectron2 CfgNode
 
     Returns:
-        modeling (Backbone): modeling module, must be a subclass of :class:`Backbone`.
+        backbone (Backbone): backbone module, must be a subclass of :class:`Backbone`.
     """
-    bottom_up = build_timm_backbone(cfg, input_shape)
-    out_channels = cfg.MODEL.FPN.OUT_CHANNELS
+    bottom_up = build_resnet_backbone(cfg, input_shape)
+    in_features = cfg.MODEL.FPN.IN_FEATURES
     backbone = BiFPN(
+        cfg=cfg,
         bottom_up=bottom_up,
-        out_channels=out_channels,
-        top_block=LastLevelMaxPool(),
+        in_features=in_features,
+        out_channels=cfg.MODEL.BIFPN.OUT_CHANNELS,
+        norm=cfg.MODEL.BIFPN.NORM,
+        num_levels=cfg.MODEL.BIFPN.NUM_LEVELS,
+        num_bifpn=cfg.MODEL.BIFPN.NUM_BIFPN,
+        separable_conv=cfg.MODEL.BIFPN.SEPARABLE_CONV,
     )
     return backbone
 
 
-def convert_norm_to_detectron2_format(module, norm: Union[str, Callable], init_default: bool = False):
-    module_output = module
-    if isinstance(module, torch.nn.BatchNorm2d):
-        module_output = get_norm(norm, out_channels=module.num_features)
-        if init_default:
-            module_output.weight.data.fill_(1.0)
-            module_output.bias.data.zero_()
-        else:
-            module_output.load_state_dict(module.state_dict())
-    for name, child in module.named_children():
-        new_child = convert_norm_to_detectron2_format(child, norm, init_default)
-        if new_child is not child:
-            module_output.add_module(name, new_child)
-    return module_output
+@BACKBONE_REGISTRY.register()
+def build_timm_bifp_backbone(cfg, input_shape: ShapeSpec):
+    bottom_up = build_timm_backbone(cfg, input_shape)
+    in_features = list(range(len(bottom_up.feature_info.channels())))
+    # print("in_features", in_features)
+    backbone = BiFPN(
+        cfg=cfg,
+        bottom_up=bottom_up,
+        in_features=in_features,
+        out_channels=cfg.MODEL.BIFPN.OUT_CHANNELS,
+        norm=cfg.MODEL.BIFPN.NORM,
+        num_levels=cfg.MODEL.BIFPN.NUM_LEVELS,
+        num_bifpn=cfg.MODEL.BIFPN.NUM_BIFPN,
+        separable_conv=cfg.MODEL.BIFPN.SEPARABLE_CONV,
+    )
+    return backbone
 
 
-def convert_norm_eps_momentum_to_tf_defaults(module):
-    module_output = module
-    if isinstance(module, (nn.BatchNorm2d, BatchNorm2d, NaiveSyncBatchNorm, nn.SyncBatchNorm)):
-        module_output.momentum = BN_MOMENTUM_TF_DEFAULT
-        module_output.eps = BN_EPS_TF_DEFAULT
-    elif isinstance(module, FrozenBatchNorm2d):
-        module_output.eps = BN_EPS_TF_DEFAULT
-    for name, child in module.named_children():
-        new_child = convert_norm_eps_momentum_to_tf_defaults(child)
-        module_output.add_module(name, new_child)
-    del module
-    return module_output
+# #  --- test
+# if __name__ == "__main__":
+#     from detectron2.config import CfgNode as CN
+#     from detectron2.config import get_cfg
 
+#     cfg = get_cfg()
+#     cfg.MODEL.TIMMNETS = CN()
+#     cfg.MODEL.TIMMNETS.NAME = "efficientnetv2_rw_s"
+#     cfg.MODEL.TIMMNETS.OUT_FEATURES = [2, 3, 4]
+#     cfg.MODEL.TIMMNETS.PRETRAINED = True
+#     cfg.MODEL.TIMMNETS.BACKBONE_ARGS = CN()
+#     cfg.MODEL.TIMMNETS.BACKBONE_ARGS.drop_path_rate = 0.2
+#     cfg.MODEL.TIMMNETS.NORM = "FrozenBN"
 
-if __name__ == "__main__":
-    from detectron2.config import CfgNode as CN
+#     cfg.MODEL.BIFPN = CN()
+#     cfg.MODEL.BIFPN.NUM_LEVELS = 5
+#     cfg.MODEL.BIFPN.NUM_BIFPN = 6
+#     cfg.MODEL.BIFPN.NORM = "BN"
+#     cfg.MODEL.BIFPN.OUT_CHANNELS = 256
+#     cfg.MODEL.BIFPN.SEPARABLE_CONV = False
 
-    _C = CN()
-    _C.MODEL = CN()
-    _C.MODEL.TIMMNETS = CN()
-    _C.MODEL.TIMMNETS.NAME = "tf_efficientnet_b0"
-    _C.MODEL.TIMMNETS.PRETRAINED = True
-    _C.MODEL.TIMMNETS.EXPORTABLE = False
-    _C.MODEL.TIMMNETS.SCRIPTABLE = False
-    _C.MODEL.TIMMNETS.OUT_FEATURES = (1, 2, 3, 4)
-    _C.MODEL.TIMMNETS.NORM = "FrozenBN"
+#     cfg.MODEL.RESNETS.DEPTH = 50
+#     cfg.MODEL.RESNETS.OUT_FEATURES = ["res2", "res3", "res4"]
+#     cfg.MODEL.FPN.IN_FEATURES = ["res2", "res3", "res4"]
 
-    _C.MODEL.FPN = CN()
-    _C.MODEL.FPN.OUT_CHANNELS = 256
+#     model = build_timm_bifp_backbone(cfg, ShapeSpec(channels=3))
+#     # model = build_resnet_bifpn_backbone(cfg, ShapeSpec(channels=3))
+#     # print(model)
 
-    model = build_timm_bifpn_backbone(_C, ShapeSpec(channels=3))
-    print(model)
-
-    print(model.output_shape())
+#     with torch.no_grad():
+#         inputs = torch.randn(1, 3, 1024, 1024)
+#         outputs = model(inputs)
+#     print([o.shape for o in outputs.values()])
+#     print(outputs.keys())

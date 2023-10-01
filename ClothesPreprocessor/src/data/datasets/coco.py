@@ -37,6 +37,30 @@ class MyDatasetInfo:
     human_parse_image_suffix: str
 
 
+LIP_HUMAN_PARSING_CATEGORIES = [
+    "Background",
+    "Hat",
+    "Hair",
+    "Glove",
+    "Sunglasses",
+    "Upper-clothes",
+    "Dress",
+    "Coat",
+    "Socks",
+    "Pants",
+    "Jumpsuits",
+    "Scarf",
+    "Skirt",
+    "Face",
+    "Left-arm",
+    "Right-arm",
+    "Left-leg",
+    "Right-leg",
+    "Left-shoe",
+    "Right-shoe",
+]
+
+
 def get_metadata(base_path: Optional[str]) -> Dict[str, Any]:
     """
     Returns metadata associated with COCO DensePose datasets
@@ -54,28 +78,7 @@ def get_metadata(base_path: Optional[str]) -> Dict[str, Any]:
         "densepose_smpl_subdiv": maybe_prepend_base_path(base_path, "SMPL_subdiv.mat"),
         "densepose_smpl_subdiv_transform": maybe_prepend_base_path(base_path, "SMPL_SUBDIV_TRANSFORM.mat"),
         "num_sem_seg_classes": 20,
-        "stuff_classes": [
-            "Background",
-            "Hat",
-            "Hair",
-            "Glove",
-            "Sunglasses",
-            "Upper-clothes",
-            "Dress",
-            "Coat",
-            "Socks",
-            "Pants",
-            "Jumpsuits",
-            "Scarf",
-            "Skirt",
-            "Face",
-            "Left-arm",
-            "Right-arm",
-            "Left-leg",
-            "Right-leg",
-            "Left-shoe",
-            "Right-shoe",
-        ],
+        "stuff_classes": LIP_HUMAN_PARSING_CATEGORIES,
         "keypoint_names": COCO_PERSON_KEYPOINT_NAMES,
         "keypoint_flip_map": COCO_PERSON_KEYPOINT_FLIP_MAP,
         "keypoint_connection_rules": KEYPOINT_CONNECTION_RULES,
@@ -342,21 +345,21 @@ _PREDEFINED_SPLITS_COCO = {
         name="my_densepose_coco_2014_train_cse",
         images_root="coco/train2014",
         annotations_fpath="coco/annotations/densepose_train2014_cse.json",
-        human_parse_annotations_fpath="coco/annotations/human_parsing",
+        human_parse_annotations_fpath="coco/annotations/lip_human_parsing",
         human_parse_image_suffix=".png",
     ),
-    "my_densepose_minival2014_cse": MyDatasetInfo(
-        name="my_densepose_minival2014_cse",
+    "my_densepose_coco_minival2014_cse": MyDatasetInfo(
+        name="my_densepose_coco_minival2014_cse",
         images_root="coco/val2014",
         annotations_fpath="coco/annotations/densepose_minival2014_cse.json",
-        human_parse_annotations_fpath="coco/annotations/human_parsing",
+        human_parse_annotations_fpath="coco/annotations/lip_human_parsing",
         human_parse_image_suffix=".png",
     ),
-    "my_densepose_valminusminival2014_cse": MyDatasetInfo(
-        name="my_densepose_valminusminival2014_cse",
+    "my_densepose_coco_valminusminival2014_cse": MyDatasetInfo(
+        name="my_densepose_coco_valminusminival2014_cse",
         images_root="coco/val2014",
         annotations_fpath="coco/annotations/densepose_valminusminival2014_cse.json",
-        human_parse_annotations_fpath="coco/annotations/human_parsing",
+        human_parse_annotations_fpath="coco/annotations/lip_human_parsing",
         human_parse_image_suffix=".png",
     ),
 }
