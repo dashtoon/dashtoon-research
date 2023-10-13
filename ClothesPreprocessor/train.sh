@@ -1,7 +1,6 @@
 #!/bin/bash
 timestamp=$(date +%Y%m%d-%H%M%S)
-python train_net.py \
-        --config-file /mnt/data/repos/dashtoon-research/ClothesPreprocessor/configs/DensePose-EFFV2-BiFPN-Keypoint-Seg.yaml \
+DETECTRON2_DATASETS="/mnt/disk1/repos/dashtoon-research/ClothesPreprocessor/datasets" python train_net.py \
+        --config-file configs/DensePose-EFFV2-BiFPN-Keypoint-Seg.yaml \
         OUTPUT_DIR ./output/${timestamp} \
-        CUDNN_BENCHMARK True \
-        SOLVER.CHECKPOINT_PERIOD 20
+        CUDNN_BENCHMARK True

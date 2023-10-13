@@ -396,7 +396,6 @@ def register_dataset(dataset_name: str, dataset_data: MyDatasetInfo, datasets_ro
     )
 
 
-DEFAULT_DATASETS_ROOT = "/mnt/data/repos/dashtoon-research/ClothesPreprocessor/datasets"
-
+_root = os.path.expanduser(os.getenv("DETECTRON2_DATASETS", "datasets"))
 for key, info in _PREDEFINED_SPLITS_COCO.items():
-    register_dataset(key, info, DEFAULT_DATASETS_ROOT)
+    register_dataset(key, info, _root)

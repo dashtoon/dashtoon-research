@@ -36,6 +36,11 @@ from icecream import ic, install
 ic.configureOutput(includeContext=True, contextAbsPath=True)
 install()
 
+import resource
+
+rlimit = resource.getrlimit(resource.RLIMIT_NOFILE)
+resource.setrlimit(resource.RLIMIT_NOFILE, (2048, rlimit[1]))
+
 
 def setup(args):
     cfg = get_cfg()
