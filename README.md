@@ -9,8 +9,8 @@ This repo contains the code and details of the algorithm and execution flow to a
 <hr>
 
 ``run.py`` is the main script which contains code to:
-- Extract bounding boxes using [GroundingDINO]([url](https://github.com/IDEA-Research/GroundingDINO)https://github.com/IDEA-Research/GroundingDINO).
-- Extract Segmentation Masks with promptable [Segment-Anything]([url](https://github.com/facebookresearch/segment-anything)https://github.com/facebookresearch/segment-anything) using the bounding box outputs from GroundingDINO.
+- Extract bounding boxes using [GroundingDINO](https://github.com/IDEA-Research/GroundingDINO).
+- Extract Segmentation Masks with promptable [Segment-Anything](https://github.com/facebookresearch/segment-anything) using the bounding box outputs from GroundingDINO.
 - Calculate object mapping information between storyboard and generated image pair based on segmentation masks and boudning box overlaps.
 <br>
-Note: The first two steps are encapsulated using an open-source implementation [lang_segment_anything]([url](https://github.com/luca-medeiros/lang-segment-anything)https://github.com/luca-medeiros/lang-segment-anything)
+Note: The first two steps are encapsulated using an open-source implementation [Lang-Segment-Anything](https://github.com/luca-medeiros/lang-segment-anything) which lets you give text prompt and get mask outputs.
