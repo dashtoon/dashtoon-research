@@ -1,13 +1,13 @@
 # Mis-Alignment Penalization Scheme Between Storyboard and Generated Image Pair
 
-#### Problem space<br><br>
+### Problem space<br><br>
 Goal is to filter out data points where the generated image is not aligned with the storyboard image. Since generated image was generated with storyboard image as the conditioning input, the objects in generated image need to respect the positions, orientations and shapes of objects in the storyboard image.
 Therefore if the generated image fails to do so, we need to filter that pair out.
 <br>
 This repo contains the code and details of the algorithm and execution flow to achieve above.
 <hr>
 
-#### Details of the file ``run.py``:<br><br>
+### Details of the file ``run.py``:<br><br>
 ``run.py`` is the main script which contains code to:
 - Extract bounding boxes using [GroundingDINO](https://github.com/IDEA-Research/GroundingDINO).
 - Extract Segmentation Masks with promptable [Segment-Anything](https://github.com/facebookresearch/segment-anything) using the bounding box outputs from GroundingDINO.
@@ -16,7 +16,7 @@ This repo contains the code and details of the algorithm and execution flow to a
 Note: The first two steps are encapsulated using an open-source implementation Lang-Segment-Anything (https://github.com/luca-medeiros/lang-segment-anything) which lets you give text prompt and get mask outputs.
 <hr>
 
-#### Details of algorithm to compute misalignment penalization score between storyboard and generated image pair
+### Details of algorithm to compute misalignment penalization score between storyboard and generated image pair
 
 Inputs:
 
@@ -25,7 +25,7 @@ Inputs:
 
 Explanation
 
-![Untitled](https://prod-files-secure.s3.us-west-2.amazonaws.com/131d7e41-d82d-418c-9dda-51f55df96d2e/68dd0405-5b47-4aef-b7e9-9d1981da8917/Untitled.png)
+<img src="./images/mapping_graph_1.png" alt="mapping_graph_1" height="384" width="384"/>
 
 ```python
 x = 4 # number of masks in storyboard images (middle column nodes in above graph)
@@ -39,7 +39,7 @@ altenate_mapping_graph = {0: [[0], []], 1: [[], [2]], 2: [[2], []], 3: [[4], []]
 	misalignment_penalization_score = a + (1-1) + (1-1) + (1-1) + (1-1) + 1 = 3
 ```
 
-![Untitled](https://prod-files-secure.s3.us-west-2.amazonaws.com/131d7e41-d82d-418c-9dda-51f55df96d2e/49584473-7181-4119-90ec-35c6b857b96e/Untitled.png)
+<img src="./images/mapping_graph_2.png" alt="mapping_graph_2" height="384" width="384"/>
 
 ```python
 x = 4 # number of masks in storyboard images (middle column nodes in above graph)
@@ -109,3 +109,4 @@ def misalignment_penalization_score(mapping_graph, a):
         penalty += (freq - 1)
     return penalty
 ```
+<hr>
