@@ -11,7 +11,7 @@ This repo contains the code and details of the algorithm and execution flow to a
 ``run.py`` is the main script which contains code to:
 - Extract bounding boxes using [GroundingDINO](https://github.com/IDEA-Research/GroundingDINO).
 - Extract Segmentation Masks with promptable [Segment-Anything](https://github.com/facebookresearch/segment-anything) using the bounding box outputs from GroundingDINO.
-- Calculate object mapping information between storyboard and generated image pair based on segmentation masks and boudning box overlaps. This will be used to create a mapping graph that will serve as input to the algorithm to calculate misalignment penalization score.
+- Calculate object mapping information between storyboard and generated image pair based on segmentation masks and boudning box overlaps. This will be used to create a mapping graph that will serve as input to a custom algorithm to calculate misalignment penalization score.
 <br>
 Note: The first two steps are encapsulated using an open-source implementation Lang-Segment-Anything (https://github.com/luca-medeiros/lang-segment-anything) which lets you give text prompt and get mask outputs.
 <hr>
