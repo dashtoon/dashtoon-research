@@ -1,4 +1,4 @@
-# Mis-Alignment Penalization Scheme Between Storyboard and Generated Image Pair
+# Misalignment Penalization Scheme Between Storyboard and Generated Image Pair
 
 ### Problem space<br><br>
 Goal is to filter out data points where the generated image is not aligned with the storyboard image. Since generated image was generated with storyboard image as the conditioning input, the objects in generated image need to respect the positions, orientations and shapes of objects in the storyboard image.
